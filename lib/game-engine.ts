@@ -29,7 +29,13 @@ export const ROUND_CARDS: readonly number[] = [
   2, 3, 4, 5, 6, 7, 8, 9, 10,
 ];
 
-export const SUBTOTAL_AFTER_ROUNDS = new Set([5, 10, 15, 18]);
+export const SUBTOTAL_CHECKPOINTS: Record<number, string> = {
+  4: 'Subtotal (R1–5)',
+  9: 'Subtotal (R1–10)',
+  14: 'Subtotal (R1–15)',
+  17: 'Subtotal (R1–18)',
+  18: 'FINAL TOTAL',
+};
 
 export interface RoundMeta {
   roundIdx: number;      // 0..18
@@ -91,12 +97,12 @@ export function getRoundMeta(
   };
 }
 
-export function scoreEntry(bid: number, won: number): { delta: number; notation: string; hit: boolean } {
+export function scoreEntry(bid: number, won: number): { delta: number; notation: string; status: 'hit' | 'zero' | 'miss'; hit: boolean } {
   if (won === bid) {
-    return { delta: bid, notation: `${bid}+${bid}`, hit: true };
+    return { delta: bid, notation: `${bid}+${bid}`, status: bid === 0 ? 'zero' : 'hit', hit: true };
   }
   const diff = Math.abs(bid - won);
-  return { delta: -diff, notation: `${bid}-${diff}`, hit: false };
+  return { delta: -diff, notation: `${bid}-${diff}`, status: 'miss', hit: false };
 }
 
 export function computeTotals(rounds: RoundRecord[], upToCount = rounds.length): number[] {
@@ -120,4 +126,122 @@ export function getWinners(players: PlayerRef[], rounds: RoundRecord[]): string[
   const totals = computeTotals(rounds);
   const max = Math.max(...totals);
   return players.filter((_, idx) => totals[idx] === max).map((p) => p.name);
+}
+
+export interface RankedPlayer {
+  idx: number;
+  name: string;
+  score: number;
+  rank: number;
+  exactHits: number;
+  misses: number;
+}
+
+export function rankPlayers(players: PlayerRef[], totals: number[], rounds: RoundRecord[]): RankedPlayer[] {
+  const items = players.map((p, idx) => {
+    let exactHits = 0;
+    let misses = 0;
+    for (const r of rounds) {
+      if (r.won[idx] === r.bids[idx]) exactHits++;
+      else misses++;
+    }
+    return { idx, name: p.name, score: totals[idx], rank: 1, exactHits, misses };
+  });
+
+  items.sort((a, b) => b.score - a.score || b.exactHits - a.exactHits || a.idx - b.idx);
+
+  let currentRank = 1;
+  for (let i = 0; i < items.length; i++) {
+    if (i > 0 && items[i].score < items[i - 1].score) {
+      currentRank = i + 1;
+    }
+    items[i].rank = currentRank;
+  }
+  return items;
+}
+
+export interface MatchHighlights {
+  mostExact: { names: string; count: number };
+  bestRound: { delta: number; player: string; roundNum: number; notation: string };
+  bestJump: { gain: number; player: string; label: string; from: number; to: number };
+  cleanestStreak: { names: string; streak: number; misses: number; fewestMissesGlobal: number };
+}
+
+export function computeHighlights(players: PlayerRef[], rounds: RoundRecord[]): MatchHighlights | null {
+  if (!rounds.length) return null;
+
+  const exactCounts = [0, 0, 0, 0, 0];
+  const missCounts = [0, 0, 0, 0, 0];
+  const bestStreaks = [0, 0, 0, 0, 0];
+  const curStreaks = [0, 0, 0, 0, 0];
+
+  let bestRound = { delta: -999, player: players[0].name, roundNum: 1, notation: '0+0' };
+
+  rounds.forEach((rd, rIdx) => {
+    for (let p = 0; p < 5; p++) {
+      const res = scoreEntry(rd.bids[p], rd.won[p]);
+      if (res.delta > bestRound.delta) {
+        bestRound = { delta: res.delta, player: players[p].name, roundNum: rIdx + 1, notation: res.notation };
+      }
+      if (res.hit) {
+        exactCounts[p]++;
+        curStreaks[p]++;
+        if (curStreaks[p] > bestStreaks[p]) bestStreaks[p] = curStreaks[p];
+      } else {
+        missCounts[p]++;
+        curStreaks[p] = 0;
+      }
+    }
+  });
+
+  const maxExact = Math.max(...exactCounts);
+  const exactWinners = players.filter((_, i) => exactCounts[i] === maxExact).map((p) => p.name);
+
+  const maxStreak = Math.max(...bestStreaks);
+  const streakIdx = bestStreaks.indexOf(maxStreak);
+  const minMisses = Math.min(...missCounts);
+  const cleanestWinners = players.filter((_, i) => bestStreaks[i] === maxStreak).map((p) => p.name);
+
+  const runningTotalsByRound: number[][] = [];
+  const running = [0, 0, 0, 0, 0];
+  for (const r of rounds) {
+    for (let p = 0; p < 5; p++) {
+      running[p] += scoreEntry(r.bids[p], r.won[p]).delta;
+    }
+    runningTotalsByRound.push([...running]);
+  }
+
+  const segments = [
+    { label: 'R1–R5', fromIdx: -1, toIdx: 4 },
+    { label: 'R6–R10', fromIdx: 4, toIdx: 9 },
+    { label: 'R11–R15', fromIdx: 9, toIdx: 14 },
+    { label: 'R16–R19', fromIdx: 14, toIdx: 18 },
+    { label: '2nd Half (R11–R19)', fromIdx: 9, toIdx: 18 },
+  ];
+
+  let bestJump = { gain: -999, player: players[0].name, label: 'R11–R19', from: 0, to: 0 };
+  segments.forEach((seg) => {
+    if (rounds.length > seg.toIdx) {
+      const prevTotals = seg.fromIdx >= 0 ? runningTotalsByRound[seg.fromIdx] : [0, 0, 0, 0, 0];
+      const endTotals = runningTotalsByRound[seg.toIdx];
+      for (let p = 0; p < 5; p++) {
+        const gain = endTotals[p] - prevTotals[p];
+        if (gain > bestJump.gain) {
+          bestJump = { gain, player: players[p].name, label: seg.label, from: prevTotals[p], to: endTotals[p] };
+        }
+      }
+    }
+  });
+
+  return {
+    mostExact: { names: exactWinners.join(', '), count: maxExact },
+    bestRound,
+    bestJump,
+    cleanestStreak: {
+      names: cleanestWinners.join(', '),
+      streak: maxStreak,
+      misses: missCounts[streakIdx],
+      fewestMissesGlobal: minMisses,
+    },
+  };
 }
