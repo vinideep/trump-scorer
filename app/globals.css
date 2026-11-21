@@ -1,0 +1,584 @@
+:root {
+  --bg: #0f172a;
+  --surface: #1e293b;
+  --surface-2: #273549;
+  --border: #334155;
+  --text: #f8fafc;
+  --muted: #94a3b8;
+  --accent: #10b981;
+  --accent-dark: #059669;
+  --blue: #3b82f6;
+  --amber: #f59e0b;
+  --red: #ef4444;
+  --paper: #fdfbf2;
+  --paper-line: #cbd5e1;
+  --paper-ink: #1e293b;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+  border: none;
+  color: inherit;
+  background: transparent;
+}
+
+button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.app-shell {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 12px 14px 48px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  margin-bottom: 14px;
+}
+
+.brand {
+  font-weight: 800;
+  font-size: 1.05rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sync-pill {
+  font-size: 0.72rem;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.15);
+  color: #6ee7b7;
+  font-weight: 600;
+}
+
+.sync-pill.saving {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fcd34d;
+}
+
+.sync-pill.error {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+}
+
+.nav-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.btn {
+  padding: 8px 13px;
+  border-radius: 10px;
+  font-weight: 600;
+  font-size: 0.88rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  transition: transform 0.08s ease, background 0.15s ease;
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: #052e16;
+  border-color: var(--accent);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #34d399;
+}
+
+.btn-blue {
+  background: var(--blue);
+  color: #fff;
+  border-color: var(--blue);
+}
+
+.btn-danger {
+  background: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+.btn-sm {
+  padding: 5px 10px;
+  font-size: 0.78rem;
+  border-radius: 8px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px;
+  margin-bottom: 14px;
+}
+
+.card-title {
+  margin: 0 0 12px;
+  font-size: 1rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+/* Seat slots */
+.seats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.seat-card {
+  background: var(--bg);
+  border: 1.5px dashed var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 76px;
+  justify-content: space-between;
+}
+
+.seat-card.filled {
+  border-style: solid;
+  border-color: var(--accent);
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.seat-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.seat-name {
+  font-weight: 700;
+  font-size: 0.96rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.seat-controls {
+  display: flex;
+  gap: 4px;
+}
+
+.icon-btn {
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  font-size: 0.72rem;
+  border: 1px solid var(--border);
+}
+
+/* Roster chips */
+.roster-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.roster-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1.5px solid var(--border);
+  font-weight: 600;
+  font-size: 0.92rem;
+  transition: all 0.12s ease;
+}
+
+.roster-chip.selected {
+  background: rgba(16, 185, 129, 0.2);
+  border-color: var(--accent);
+  color: #a7f3d0;
+}
+
+.chip-badge {
+  background: var(--accent);
+  color: #052e16;
+  font-weight: 800;
+  font-size: 0.74rem;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+
+.chip-meta {
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.chip-del {
+  margin-left: 2px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(239, 68, 68, 0.22);
+  color: #fca5a5;
+  font-size: 0.74rem;
+}
+
+.add-player-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.text-input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 0.92rem;
+  outline: none;
+}
+
+.text-input:focus {
+  border-color: var(--accent);
+}
+
+/* Pill toggles */
+.pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pill-btn {
+  padding: 9px 14px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1.5px solid var(--border);
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.pill-btn.active {
+  background: rgba(59, 130, 246, 0.22);
+  border-color: var(--blue);
+  color: #bfdbfe;
+}
+
+.preview-box {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  display: grid;
+  gap: 6px;
+  font-size: 0.85rem;
+}
+
+/* Split desktop layout during gameplay */
+.play-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+
+@media (min-width: 920px) {
+  .play-layout {
+    grid-template-columns: 1.05fr 1fr;
+    align-items: start;
+  }
+}
+
+.role-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.badge-amber {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fcd34d;
+}
+
+.badge-green {
+  background: rgba(16, 185, 129, 0.2);
+  color: #6ee7b7;
+}
+
+.badge-blue {
+  background: rgba(59, 130, 246, 0.2);
+  color: #93c5fd;
+}
+
+.reversal-banner {
+  background: linear-gradient(90deg, rgba(245, 158, 11, 0.22), rgba(239, 68, 68, 0.16));
+  border: 1px solid rgba(245, 158, 11, 0.5);
+  color: #fde68a;
+  padding: 9px 12px;
+  border-radius: 10px;
+  font-size: 0.84rem;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
+/* Player scoring rows */
+.turn-row {
+  background: var(--bg);
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-bottom: 9px;
+}
+
+.turn-row.active-focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+.turn-row-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.turn-name {
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.num-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.num-btn {
+  min-width: 40px;
+  height: 38px;
+  padding: 0 8px;
+  border-radius: 9px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-weight: 700;
+  font-size: 0.92rem;
+}
+
+.num-btn.selected {
+  background: var(--accent);
+  color: #052e16;
+  border-color: var(--accent);
+}
+
+.num-btn.exact-hint {
+  border-color: var(--amber);
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.35);
+  color: #fde68a;
+}
+
+/* Ruled notebook score sheet */
+.notebook {
+  background: var(--paper);
+  color: var(--paper-ink);
+  border-radius: 14px;
+  overflow: hidden;
+  border: 2px solid #cbd5e1;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.notebook-header {
+  background: #f1ecd9;
+  padding: 10px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 2px solid #94a3b8;
+  font-weight: 800;
+  font-size: 0.9rem;
+}
+
+.notebook-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.notebook-table th,
+.notebook-table td {
+  border-bottom: 1px solid var(--paper-line);
+  border-right: 1px solid #e2e8f0;
+  padding: 6px 4px;
+  text-align: center;
+}
+
+.notebook-table th {
+  background: #f8f5e6;
+  font-weight: 800;
+  font-size: 0.78rem;
+  color: #0f172a;
+}
+
+.notebook-table tbody tr.round-row {
+  cursor: pointer;
+}
+
+.notebook-table tbody tr.round-row:hover {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.cell-hit {
+  color: #047857;
+  font-weight: 700;
+}
+
+.cell-miss {
+  color: #dc2626;
+  font-weight: 700;
+}
+
+.cell-cards {
+  background: #f8f5e6;
+  font-weight: 800;
+  color: #475569;
+  width: 44px;
+}
+
+.subtotal-row td {
+  background: #eef2ff;
+  font-weight: 800;
+  border-top: 2px solid #64748b;
+  border-bottom: 2px solid #64748b;
+  color: #1e3a8a;
+}
+
+.final-row td {
+  background: #dcfce7;
+  font-weight: 900;
+  border-top: 2px solid #047857;
+  color: #065f46;
+  font-size: 0.94rem;
+}
+
+.reversal-divider td {
+  background: #fef3c7;
+  color: #92400e;
+  font-weight: 800;
+  font-size: 0.74rem;
+  padding: 4px;
+  border-top: 2px dashed #d97706;
+  border-bottom: 2px dashed #d97706;
+}
+
+.toast {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #0f172a;
+  color: #f8fafc;
+  border: 1px solid var(--accent);
+  padding: 10px 16px;
+  border-radius: 999px;
+  font-size: 0.86rem;
+  font-weight: 600;
+  z-index: 50;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.45);
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px;
+  z-index: 40;
+}
+
+.modal-card {
+  width: 100%;
+  max-width: 560px;
+  max-height: 88vh;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px;
+}
+
+.history-item {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
