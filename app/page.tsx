@@ -212,8 +212,8 @@ export default function CardGameScorerApp() {
   };
 
   const addRummySeat = () => {
-    if (rummySeats.length >= 6) {
-      showToast('Maximum 6 players allowed in Rummy 240', 'dark');
+    if (rummySeats.length >= 9) {
+      showToast('Maximum 9 players allowed in Rummy 240', 'dark');
       return;
     }
     setRummySeats((prev) => [...prev, `Player ${prev.length + 1}`]);
@@ -619,7 +619,7 @@ export default function CardGameScorerApp() {
                   <h3 className="hub-title">Indian Rummy 240</h3>
                   <p className="hub-desc">240 Pool elimination, 0 show, 20 drop, 40 mid, 80 full count, last man standing.</p>
                 </div>
-                <div className="hub-meta">2–6 Players · 240 Pts Knockout</div>
+                <div className="hub-meta">2–9 Players · 240 Pts Knockout</div>
               </div>
             </div>
 
@@ -650,8 +650,8 @@ export default function CardGameScorerApp() {
                   </h2>
                   <div style={{ display: 'flex', gap: 6 }}>
                     {selectedGameType === 'rummy240' && (
-                      <button className="section-hint" onClick={addRummySeat} disabled={rummySeats.length >= 6}>
-                        + Add Seat
+                      <button className="section-hint" onClick={addRummySeat} disabled={rummySeats.length >= 9}>
+                        + Add Seat ({rummySeats.length}/9)
                       </button>
                     )}
                     <button className="section-hint" onClick={() => setManageRoster((v) => !v)}>
@@ -1148,11 +1148,11 @@ export default function CardGameScorerApp() {
           <main className="workspace">
             <section className={`pane-play ${viewTab === 'play' ? '' : 'mobile-hidden'}`}>
               {/* Standings Bar */}
-              <div className="standings-mini" style={{ gridTemplateColumns: `repeat(${activeGame.players.length}, 1fr)` }}>
+              <div className="standings-mini" style={{ display: 'flex', gap: 5, overflowX: 'auto', paddingBottom: 4 }}>
                 {activeGame.players.map((p, idx) => {
                   const s = rummyStatuses[idx];
                   return (
-                    <div key={p.id} className={`mini-card ${s?.isEliminated ? 'elim-row' : ''}`}>
+                    <div key={p.id} className={`mini-card ${s?.isEliminated ? 'elim-row' : ''}`} style={{ flex: '1 0 72px' }}>
                       <div className="mini-name truncate">{p.name}</div>
                       <div className="mini-score tabular" style={{ color: s?.isEliminated ? 'var(--rose-600)' : 'var(--felt-900)' }}>
                         {s?.cumulativeScore ?? 0}

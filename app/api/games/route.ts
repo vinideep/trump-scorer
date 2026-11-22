@@ -64,8 +64,8 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Invalid first_player_idx.' }, { status: 400 });
       }
     } else if (gameType === 'rummy240') {
-      if (players.length < 2 || players.length > 6) {
-        return NextResponse.json({ error: 'Rummy 240 requires between 2 and 6 players.' }, { status: 400 });
+      if (players.length < 2 || players.length > 9) {
+        return NextResponse.json({ error: 'Rummy 240 requires between 2 and 9 players.' }, { status: 400 });
       }
       if (!Number.isInteger(firstPlayerIdx) || firstPlayerIdx < 0 || firstPlayerIdx >= players.length) {
         return NextResponse.json({ error: 'Invalid first_player_idx.' }, { status: 400 });
