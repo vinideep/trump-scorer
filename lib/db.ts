@@ -38,6 +38,7 @@ export function ensureSchema(): Promise<void> {
       await db.execute(`
         CREATE TABLE IF NOT EXISTS games (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
+          game_type TEXT NOT NULL DEFAULT 'trump',
           players TEXT NOT NULL DEFAULT '[]',
           first_player_idx INTEGER NOT NULL DEFAULT 0,
           initial_dir TEXT NOT NULL DEFAULT 'CW',
@@ -48,6 +49,11 @@ export function ensureSchema(): Promise<void> {
           updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         )
       `);
+      try {
+        await db.execute("ALTER TABLE games ADD COLUMN game_type TEXT NOT NULL DEFAULT 'trump'");
+      } catch {
+        // Column already exists
+      }
     })().catch((err) => {
       schemaPromise = null;
       throw err;

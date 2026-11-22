@@ -14,6 +14,7 @@ export interface RoundRecord {
 
 export interface GameRecord {
   id: number;
+  game_type?: 'trump' | 'rummy240';
   players: PlayerRef[];
   first_player_idx: number;
   initial_dir: Direction;

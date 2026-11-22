@@ -16,6 +16,17 @@ import {
   type PlayerRef,
   type RoundRecord,
 } from '@/lib/game-engine';
+import {
+  computeRummyTotals,
+  getRummyPlayerStatuses,
+  getRummyWinners,
+  isRummyGameCompleted,
+  RUMMY_FIRST_DROP,
+  RUMMY_FULL_COUNT,
+  RUMMY_MAX_POINTS,
+  RUMMY_MIDDLE_DROP,
+  type RummyRoundRecord,
+} from '@/lib/rummy-engine';
 
 interface RosterPlayer {
   id: number;
@@ -24,35 +35,66 @@ interface RosterPlayer {
   wins: number;
 }
 
-type ScreenMode = 'setup' | 'play' | 'gameover';
+type SelectedGameType = 'trump' | 'rummy240';
+type ScreenMode = 'setup' | 'play' | 'gameover' | 'history';
 type ViewTab = 'play' | 'sheet';
-type RoundPhase = 'bidding' | 'scoring';
+type TrumpPhase = 'bidding' | 'scoring';
 
-export default function TrumpScorerPage() {
+interface UniversalGameRecord {
+  id: number;
+  game_type: 'trump' | 'rummy240';
+  players: PlayerRef[];
+  first_player_idx: number;
+  initial_dir: Direction;
+  rounds: unknown[];
+  status: 'active' | 'completed';
+  winner_names: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export default function CardGameScorerApp() {
+  const [selectedGameType, setSelectedGameType] = useState<SelectedGameType>('trump');
   const [screen, setScreen] = useState<ScreenMode>('setup');
   const [viewTab, setViewTab] = useState<ViewTab>('play');
-  const [gameOverShowSheet, setGameOverShowSheet] = useState(false);
+  const [historyFilter, setHistoryFilter] = useState<'all' | 'trump' | 'rummy240'>('all');
 
   // Database state
   const [roster, setRoster] = useState<RosterPlayer[]>([]);
-  const [games, setGames] = useState<GameRecord[]>([]);
+  const [games, setGames] = useState<UniversalGameRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncState, setSyncState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [toast, setToast] = useState<{ msg: string; tone: 'dark' | 'success' | 'error' } | null>(null);
 
-  // Setup state
-  const [seats, setSeats] = useState<string[]>(['Player 1', 'Player 2', 'Player 3', 'Player 4', 'Player 5']);
-  const [starterIndex, setStarterIndex] = useState<number>(0);
-  const [initialDirection, setInitialDirection] = useState<Direction>('CW');
+  // Setup state (Trump: exactly 5; Rummy: 2..6)
+  const [trumpSeats, setTrumpSeats] = useState<string[]>(['Player 1', 'Player 2', 'Player 3', 'Player 4', 'Player 5']);
+  const [trumpStarterIndex, setTrumpStarterIndex] = useState<number>(0);
+  const [trumpInitialDirection, setTrumpInitialDirection] = useState<Direction>('CW');
+
+  const [rummySeats, setRummySeats] = useState<string[]>(['Player 1', 'Player 2', 'Player 3', 'Player 4']);
+  const [rummyDealerIndex, setRummyDealerIndex] = useState<number>(0);
+
   const [newPlayerName, setNewPlayerName] = useState('');
   const [manageRoster, setManageRoster] = useState(false);
 
   // Active game state
-  const [activeGame, setActiveGame] = useState<GameRecord | null>(null);
-  const [phase, setPhase] = useState<RoundPhase>('bidding');
-  const [activePlayerIdx, setActivePlayerIdx] = useState<number>(0);
-  const [currentBids, setCurrentBids] = useState<(number | null)[]>([null, null, null, null, null]);
-  const [currentWons, setCurrentWons] = useState<(number | null)[]>([null, null, null, null, null]);
+  const [activeGame, setActiveGame] = useState<UniversalGameRecord | null>(null);
+
+  // Trump active states
+  const [trumpPhase, setTrumpPhase] = useState<TrumpPhase>('bidding');
+  const [trumpActivePlayerIdx, setTrumpActivePlayerIdx] = useState<number>(0);
+  const [trumpBids, setTrumpBids] = useState<(number | null)[]>([null, null, null, null, null]);
+  const [trumpWons, setTrumpWons] = useState<(number | null)[]>([null, null, null, null, null]);
+
+  // Rummy active states
+  const [rummyScores, setRummyScores] = useState<(number | null)[]>([null, null, null, null]);
+  const [rummyTypes, setRummyTypes] = useState<('show' | 'drop' | 'middle' | 'full' | 'manual' | 'out')[]>([
+    'manual',
+    'manual',
+    'manual',
+    'manual',
+  ]);
+  const [rummyActivePlayerIdx, setRummyActivePlayerIdx] = useState<number>(0);
 
   // Modals
   const [showSchedule, setShowSchedule] = useState(false);
@@ -62,6 +104,7 @@ export default function TrumpScorerPage() {
   const [editActivePlayer, setEditActivePlayer] = useState<number>(0);
   const [editBids, setEditBids] = useState<number[]>([0, 0, 0, 0, 0]);
   const [editWons, setEditWons] = useState<number[]>([0, 0, 0, 0, 0]);
+  const [editRummyScores, setEditRummyScores] = useState<number[]>([]);
 
   const showToast = useCallback((msg: string, tone: 'dark' | 'success' | 'error' = 'dark') => {
     setToast({ msg, tone });
@@ -79,7 +122,7 @@ export default function TrumpScorerPage() {
       if (Array.isArray(pData.players)) setRoster(pData.players);
       if (Array.isArray(gData.games)) setGames(gData.games);
     } catch {
-      showToast('Could not reach database. Check TURSO_DATABASE_URL.', 'error');
+      showToast('Could not reach database. Check connection.', 'error');
     } finally {
       setLoading(false);
     }
@@ -89,23 +132,26 @@ export default function TrumpScorerPage() {
     loadAllData();
   }, [loadAllData]);
 
-  // --- Roster interactions ---
+  // --- Universal Roster Management ---
+  const currentSeats = selectedGameType === 'trump' ? trumpSeats : rummySeats;
+  const setCurrentSeats = selectedGameType === 'trump' ? setTrumpSeats : setRummySeats;
+
   const toggleRosterPlayer = (p: RosterPlayer) => {
-    const existingIdx = seats.indexOf(p.name);
+    const existingIdx = currentSeats.indexOf(p.name);
     if (existingIdx !== -1) {
-      const next = [...seats];
+      const next = [...currentSeats];
       next[existingIdx] = `Player ${existingIdx + 1}`;
-      setSeats(next);
+      setCurrentSeats(next);
       return;
     }
-    const emptyIdx = seats.findIndex((name, idx) => name === `Player ${idx + 1}` || name.trim() === '');
+    const emptyIdx = currentSeats.findIndex((name, idx) => name === `Player ${idx + 1}` || name.trim() === '');
     if (emptyIdx === -1) {
-      showToast('All 5 seats have names. Tap a seat to replace someone.', 'dark');
+      showToast('All seat slots are filled. Tap a seat name to replace.', 'dark');
       return;
     }
-    const next = [...seats];
+    const next = [...currentSeats];
     next[emptyIdx] = p.name;
-    setSeats(next);
+    setCurrentSeats(next);
   };
 
   const handleAddPlayer = async (e: React.FormEvent) => {
@@ -129,11 +175,11 @@ export default function TrumpScorerPage() {
       setNewPlayerName('');
       setSyncState('saved');
 
-      const emptyIdx = seats.findIndex((name, idx) => name === `Player ${idx + 1}` || name.trim() === '');
+      const emptyIdx = currentSeats.findIndex((name, idx) => name === `Player ${idx + 1}` || name.trim() === '');
       if (emptyIdx !== -1) {
-        const next = [...seats];
+        const next = [...currentSeats];
         next[emptyIdx] = data.player.name;
-        setSeats(next);
+        setCurrentSeats(next);
       }
       showToast(`Added "${data.player.name}" to roster`, 'success');
     } catch {
@@ -148,7 +194,7 @@ export default function TrumpScorerPage() {
       const res = await fetch(`/api/players/${p.id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error();
       setRoster((prev) => prev.filter((item) => item.id !== p.id));
-      setSeats((prev) => prev.map((s) => (s === p.name ? 'Player' : s)));
+      setCurrentSeats((prev) => prev.map((s) => (s === p.name ? 'Player' : s)));
       setSyncState('saved');
       showToast(`Removed "${p.name}"`, 'dark');
     } catch {
@@ -159,17 +205,32 @@ export default function TrumpScorerPage() {
 
   const moveSeat = (idx: number, delta: number) => {
     const target = idx + delta;
-    if (target < 0 || target > 4) return;
-    const next = [...seats];
+    if (target < 0 || target >= currentSeats.length) return;
+    const next = [...currentSeats];
     [next[idx], next[target]] = [next[target], next[idx]];
-    setSeats(next);
-    if (starterIndex === idx) setStarterIndex(target);
-    else if (starterIndex === target) setStarterIndex(idx);
+    setCurrentSeats(next);
+  };
+
+  const addRummySeat = () => {
+    if (rummySeats.length >= 6) {
+      showToast('Maximum 6 players allowed in Rummy 240', 'dark');
+      return;
+    }
+    setRummySeats((prev) => [...prev, `Player ${prev.length + 1}`]);
+  };
+
+  const removeRummySeat = (idx: number) => {
+    if (rummySeats.length <= 2) {
+      showToast('Minimum 2 players required for Rummy', 'dark');
+      return;
+    }
+    setRummySeats((prev) => prev.filter((_, i) => i !== idx));
   };
 
   // --- Start & Resume Game ---
   const handleStartGame = async () => {
-    const players: PlayerRef[] = seats.map((name, i) => {
+    const seatsToUse = selectedGameType === 'trump' ? trumpSeats : rummySeats;
+    const players: PlayerRef[] = seatsToUse.map((name, i) => {
       const found = roster.find((r) => r.name.toLowerCase() === name.toLowerCase());
       return { id: found ? found.id : i + 1, name: name.trim() || `Player ${i + 1}` };
     });
@@ -180,9 +241,10 @@ export default function TrumpScorerPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          game_type: selectedGameType,
           players,
-          first_player_idx: starterIndex,
-          initial_dir: initialDirection,
+          first_player_idx: selectedGameType === 'trump' ? trumpStarterIndex : rummyDealerIndex,
+          initial_dir: selectedGameType === 'trump' ? trumpInitialDirection : 'CW',
         }),
       });
       const data = await res.json();
@@ -190,11 +252,19 @@ export default function TrumpScorerPage() {
 
       setActiveGame(data.game);
       setGames((prev) => [data.game, ...prev]);
-      const meta = getRoundMeta(0, starterIndex, initialDirection);
-      setPhase('bidding');
-      setActivePlayerIdx(meta.starterIdx);
-      setCurrentBids([null, null, null, null, null]);
-      setCurrentWons([null, null, null, null, null]);
+
+      if (selectedGameType === 'trump') {
+        const meta = getRoundMeta(0, trumpStarterIndex, trumpInitialDirection);
+        setTrumpPhase('bidding');
+        setTrumpActivePlayerIdx(meta.starterIdx);
+        setTrumpBids([null, null, null, null, null]);
+        setTrumpWons([null, null, null, null, null]);
+      } else {
+        setRummyScores(new Array(players.length).fill(null));
+        setRummyTypes(new Array(players.length).fill('manual'));
+        setRummyActivePlayerIdx(0);
+      }
+
       setScreen('play');
       setViewTab('play');
       setSyncState('saved');
@@ -205,33 +275,65 @@ export default function TrumpScorerPage() {
     }
   };
 
-  const resumeGame = (g: GameRecord) => {
+  const resumeGame = (g: UniversalGameRecord) => {
     setActiveGame(g);
-    setSeats(g.players.map((p) => p.name));
-    setStarterIndex(g.first_player_idx);
-    setInitialDirection(g.initial_dir);
+    setSelectedGameType(g.game_type);
 
-    if (g.rounds.length >= 19) {
-      setScreen('gameover');
+    if (g.game_type === 'trump') {
+      setTrumpSeats(g.players.map((p) => p.name));
+      setTrumpStarterIndex(g.first_player_idx);
+      setTrumpInitialDirection(g.initial_dir);
+
+      if (g.rounds.length >= 19) {
+        setScreen('gameover');
+      } else {
+        const meta = getRoundMeta(g.rounds.length, g.first_player_idx, g.initial_dir);
+        setTrumpPhase('bidding');
+        setTrumpActivePlayerIdx(meta.starterIdx);
+        setTrumpBids([null, null, null, null, null]);
+        setTrumpWons([null, null, null, null, null]);
+        setScreen('play');
+        setViewTab('play');
+      }
     } else {
-      const meta = getRoundMeta(g.rounds.length, g.first_player_idx, g.initial_dir);
-      setPhase('bidding');
-      setActivePlayerIdx(meta.starterIdx);
-      setCurrentBids([null, null, null, null, null]);
-      setCurrentWons([null, null, null, null, null]);
-      setScreen('play');
-      setViewTab('play');
+      setRummySeats(g.players.map((p) => p.name));
+      setRummyDealerIndex(g.first_player_idx);
+
+      const rummyRounds = g.rounds as RummyRoundRecord[];
+      if (isRummyGameCompleted(g.players, rummyRounds)) {
+        setScreen('gameover');
+      } else {
+        setRummyScores(new Array(g.players.length).fill(null));
+        setRummyTypes(new Array(g.players.length).fill('manual'));
+        setRummyActivePlayerIdx(0);
+        setScreen('play');
+        setViewTab('play');
+      }
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const persistRounds = async (g: GameRecord, nextRounds: RoundRecord[]) => {
-    const optimistic: GameRecord = {
+  const persistUniversalRounds = async (g: UniversalGameRecord, nextRounds: unknown[]) => {
+    let status = 'active';
+    let winners: string[] = [];
+
+    if (g.game_type === 'rummy240') {
+      const rRounds = nextRounds as RummyRoundRecord[];
+      status = isRummyGameCompleted(g.players, rRounds) ? 'completed' : 'active';
+      winners = getRummyWinners(g.players, rRounds);
+    } else {
+      const tRounds = nextRounds as RoundRecord[];
+      status = tRounds.length >= 19 ? 'completed' : 'active';
+      winners = getWinners(g.players, tRounds);
+    }
+
+    const optimistic: UniversalGameRecord = {
       ...g,
       rounds: nextRounds,
-      status: nextRounds.length >= 19 ? 'completed' : 'active',
-      winner_names: getWinners(g.players, nextRounds),
+      status: status as 'active' | 'completed',
+      winner_names: winners,
     };
+
     setActiveGame(optimistic);
     setGames((prev) => prev.map((item) => (item.id === g.id ? optimistic : item)));
     setSyncState('saving');
@@ -240,7 +342,7 @@ export default function TrumpScorerPage() {
       const res = await fetch(`/api/games/${g.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rounds: nextRounds }),
+        body: JSON.stringify({ rounds: nextRounds, status, winner_names: winners }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error();
@@ -256,75 +358,48 @@ export default function TrumpScorerPage() {
     }
   };
 
-  // --- Active Round Navigation & Controls ---
-  const currentRoundIdx = activeGame ? activeGame.rounds.length : 0;
-  const isCompleted = currentRoundIdx >= 19;
-  const currentMeta = useMemo(() => {
-    if (!activeGame || isCompleted) return null;
-    return getRoundMeta(currentRoundIdx, activeGame.first_player_idx, activeGame.initial_dir);
-  }, [activeGame, currentRoundIdx, isCompleted]);
-
-  const totalBids = currentBids.reduce<number>((acc, v) => acc + (v ?? 0), 0);
-  const allBidsDone = currentBids.every((v) => v !== null);
-  const totalWons = currentWons.reduce<number>((acc, v) => acc + (v ?? 0), 0);
-  const allWonsDone = currentWons.every((v) => v !== null);
-
-  const findNextUnfilled = (turnOrder: number[], currentIdx: number, arr: (number | null)[]) => {
-    const pos = turnOrder.indexOf(currentIdx);
-    for (let step = 1; step <= 5; step++) {
-      const cand = turnOrder[(pos + step) % 5];
-      if (arr[cand] === null) return cand;
+  const handleDeleteGame = async (gameId: number) => {
+    try {
+      await fetch(`/api/games/${gameId}`, { method: 'DELETE' });
+      setGames((prev) => prev.filter((g) => g.id !== gameId));
+      if (activeGame?.id === gameId) {
+        setActiveGame(null);
+        setScreen('setup');
+      }
+      showToast('Game deleted', 'dark');
+    } catch {
+      showToast('Failed to delete game', 'error');
     }
-    return currentIdx;
   };
 
-  const tapBid = (pIdx: number, val: number) => {
-    if (!currentMeta) return;
-    const next = [...currentBids];
-    next[pIdx] = val;
-    setCurrentBids(next);
-    const nextPlayer = findNextUnfilled(currentMeta.turnOrder, pIdx, next);
-    setActivePlayerIdx(nextPlayer);
-  };
+  // --- TRUMP Active Round Calculations ---
+  const trumpRounds = (activeGame?.rounds ?? []) as RoundRecord[];
+  const currentTrumpMeta = useMemo(() => {
+    if (!activeGame || activeGame.game_type !== 'trump' || trumpRounds.length >= 19) return null;
+    return getRoundMeta(trumpRounds.length, activeGame.first_player_idx, activeGame.initial_dir);
+  }, [activeGame, trumpRounds.length]);
 
-  const lockBidsAndPlay = () => {
-    if (!allBidsDone || !currentMeta) return;
-    setPhase('scoring');
-    setActivePlayerIdx(currentMeta.starterIdx);
-    showToast('Bids confirmed! Tap tricks won.', 'success');
-  };
+  const totalTrumpBids = trumpBids.reduce<number>((acc, v) => acc + (v ?? 0), 0);
+  const allTrumpBidsDone = trumpBids.every((v) => v !== null);
+  const totalTrumpWons = trumpWons.reduce<number>((acc, v) => acc + (v ?? 0), 0);
+  const allTrumpWonsDone = trumpWons.every((v) => v !== null);
 
-  const tapWon = (pIdx: number, val: number) => {
-    if (!currentMeta) return;
-    const next = [...currentWons];
-    next[pIdx] = val;
-    setCurrentWons(next);
-    const nextPlayer = findNextUnfilled(currentMeta.turnOrder, pIdx, next);
-    setActivePlayerIdx(nextPlayer);
-  };
-
-  const setRestToZero = () => {
-    const next = currentWons.map((v) => (v === null ? 0 : v));
-    setCurrentWons(next);
-    showToast('Set remaining players to 0', 'success');
-  };
-
-  const confirmRound = async () => {
-    if (!activeGame || !currentMeta) return;
-    if (!allBidsDone || !allWonsDone || totalWons !== currentMeta.cards) {
-      showToast(`Total tricks won is ${totalWons}, must equal ${currentMeta.cards}.`, 'error');
+  const confirmTrumpRound = async () => {
+    if (!activeGame || !currentTrumpMeta) return;
+    if (!allTrumpBidsDone || !allTrumpWonsDone || totalTrumpWons !== currentTrumpMeta.cards) {
+      showToast(`Total tricks won is ${totalTrumpWons}, must equal ${currentTrumpMeta.cards}.`, 'error');
       return;
     }
 
     const newRecord: RoundRecord = {
-      roundNumber: currentMeta.roundNumber,
-      cards: currentMeta.cards,
-      bids: currentBids as number[],
-      won: currentWons as number[],
+      roundNumber: currentTrumpMeta.roundNumber,
+      cards: currentTrumpMeta.cards,
+      bids: trumpBids as number[],
+      won: trumpWons as number[],
     };
 
-    const nextRounds = [...activeGame.rounds, newRecord];
-    await persistRounds(activeGame, nextRounds);
+    const nextRounds = [...trumpRounds, newRecord];
+    await persistUniversalRounds(activeGame, nextRounds);
 
     if (nextRounds.length >= 19) {
       setScreen('gameover');
@@ -332,132 +407,236 @@ export default function TrumpScorerPage() {
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } else {
       const nextMeta = getRoundMeta(nextRounds.length, activeGame.first_player_idx, activeGame.initial_dir);
-      setPhase('bidding');
-      setActivePlayerIdx(nextMeta.starterIdx);
-      setCurrentBids([null, null, null, null, null]);
-      setCurrentWons([null, null, null, null, null]);
-      if (nextRounds.length === 10) {
-        showToast(`🔄 Rotation reversed! Now ${nextMeta.activeDir === 'CW' ? '↻ Clockwise' : '↺ Anti-Clockwise'}.`, 'success');
-      } else {
-        showToast(`Round ${currentMeta.roundNumber} saved!`, 'success');
-      }
+      setTrumpPhase('bidding');
+      setTrumpActivePlayerIdx(nextMeta.starterIdx);
+      setTrumpBids([null, null, null, null, null]);
+      setTrumpWons([null, null, null, null, null]);
+      showToast(`Round ${currentTrumpMeta.roundNumber} saved!`, 'success');
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
 
-  const undoLastRound = async () => {
-    if (!activeGame || activeGame.rounds.length === 0) return;
-    const lastRoundNum = activeGame.rounds.length;
-    const popped = activeGame.rounds[activeGame.rounds.length - 1];
-    const nextRounds = activeGame.rounds.slice(0, -1);
+  const undoTrumpRound = async () => {
+    if (!activeGame || trumpRounds.length === 0) return;
+    const lastRoundNum = trumpRounds.length;
+    const popped = trumpRounds[trumpRounds.length - 1];
+    const nextRounds = trumpRounds.slice(0, -1);
 
-    await persistRounds(activeGame, nextRounds);
+    await persistUniversalRounds(activeGame, nextRounds);
     const meta = getRoundMeta(nextRounds.length, activeGame.first_player_idx, activeGame.initial_dir);
 
     setScreen('play');
     setViewTab('play');
-    setPhase('scoring');
-    setActivePlayerIdx(meta.starterIdx);
-    setCurrentBids([...popped.bids]);
-    setCurrentWons([...popped.won]);
+    setTrumpPhase('scoring');
+    setTrumpActivePlayerIdx(meta.starterIdx);
+    setTrumpBids([...popped.bids]);
+    setTrumpWons([...popped.won]);
     showToast(`Reopened Round ${lastRoundNum}`);
   };
 
-  // --- Inline Round Editor ---
-  const openEditRound = (rIdx: number) => {
-    if (!activeGame) return;
-    const r = activeGame.rounds[rIdx];
-    const meta = getRoundMeta(rIdx, activeGame.first_player_idx, activeGame.initial_dir);
-    setEditingRoundIdx(rIdx);
-    setEditTab('wons');
-    setEditActivePlayer(meta.starterIdx);
-    setEditBids([...r.bids]);
-    setEditWons([...r.won]);
+  // --- RUMMY 240 Active Round Calculations ---
+  const rummyRounds = (activeGame?.rounds ?? []) as RummyRoundRecord[];
+  const rummyTotals = useMemo(() => {
+    if (!activeGame || activeGame.game_type !== 'rummy240') return [];
+    return computeRummyTotals(activeGame.players, rummyRounds);
+  }, [activeGame, rummyRounds]);
+
+  const rummyStatuses = useMemo(() => {
+    if (!activeGame || activeGame.game_type !== 'rummy240') return [];
+    return getRummyPlayerStatuses(activeGame.players, rummyRounds);
+  }, [activeGame, rummyRounds]);
+
+  const setRummyScoreQuick = (
+    pIdx: number,
+    val: number,
+    type: 'show' | 'drop' | 'middle' | 'full' | 'manual'
+  ) => {
+    const nextScores = [...rummyScores];
+    const nextTypes = [...rummyTypes];
+    nextScores[pIdx] = val;
+    nextTypes[pIdx] = type;
+    setRummyScores(nextScores);
+    setRummyTypes(nextTypes);
+
+    // If active player, advance to next active player
+    if (activeGame) {
+      const numPlayers = activeGame.players.length;
+      for (let s = 1; s <= numPlayers; s++) {
+        const cand = (pIdx + s) % numPlayers;
+        if (!rummyStatuses[cand]?.isEliminated && nextScores[cand] === null) {
+          setRummyActivePlayerIdx(cand);
+          break;
+        }
+      }
+    }
   };
 
-  const saveEditedRound = async () => {
-    if (!activeGame || editingRoundIdx === null) return;
-    const cards = ROUND_CARDS[editingRoundIdx];
-    const sumW = editWons.reduce((a, b) => a + b, 0);
-    if (sumW !== cards) {
-      showToast(`Total tricks won must equal ${cards} (currently ${sumW})`, 'error');
+  const confirmRummyDeal = async () => {
+    if (!activeGame || activeGame.game_type !== 'rummy240') return;
+
+    // Check that every non-eliminated player has a score
+    for (let i = 0; i < activeGame.players.length; i++) {
+      if (!rummyStatuses[i]?.isEliminated && rummyScores[i] === null) {
+        showToast(`Please enter score or drop for ${activeGame.players[i].name}`, 'error');
+        return;
+      }
+    }
+
+    // Check if at least one player made a show (0 points)
+    const hasShow = rummyScores.some((v, idx) => !rummyStatuses[idx]?.isEliminated && v === 0);
+    if (!hasShow) {
+      showToast('At least one winner must have Show (0 pts) for the deal', 'error');
       return;
     }
 
-    const nextRounds = activeGame.rounds.map((r, idx) =>
-      idx === editingRoundIdx ? { ...r, bids: [...editBids], won: [...editWons] } : r
+    const roundScores = activeGame.players.map((_, i) =>
+      rummyStatuses[i]?.isEliminated ? 0 : (rummyScores[i] ?? 0)
+    );
+    const roundTypes = activeGame.players.map((_, i) =>
+      rummyStatuses[i]?.isEliminated ? 'out' : (rummyTypes[i] ?? 'manual')
     );
 
-    const rNum = editingRoundIdx + 1;
-    setEditingRoundIdx(null);
-    await persistRounds(activeGame, nextRounds);
-    showToast(`Round ${rNum} updated & all subtotals recalculated!`, 'success');
-  };
+    const record: RummyRoundRecord = {
+      dealNumber: rummyRounds.length + 1,
+      scores: roundScores,
+      types: roundTypes,
+    };
 
-  // --- WhatsApp Summary Copy ---
-  const copySummary = () => {
-    if (!activeGame) return;
-    const totals = computeTotals(activeGame.rounds);
-    const ranked = rankPlayers(activeGame.players, totals, activeGame.rounds);
-    const medals: Record<number, string> = { 1: '🥇', 2: '🥈', 3: '🥉', 4: '4.', 5: '5.' };
-    const count = activeGame.rounds.length;
+    const nextRounds = [...rummyRounds, record];
+    await persistUniversalRounds(activeGame, nextRounds);
 
-    const lines = [
-      `♠️♥️ TRUMP CARD GAME — ${count === 19 ? 'FINAL RESULTS' : `AFTER ROUND ${count}/19`} ♦️♣️`,
-      `Rotation: ${activeGame.initial_dir === 'CW' ? '↻ CW → ↺ ACW' : '↺ ACW → ↻ CW'}`,
-      '',
-    ];
-
-    ranked.forEach((p) => {
-      lines.push(`${medals[p.rank] || p.rank + '.'} ${p.name}: ${formatSigned(p.score)} pts (${p.exactHits}/${count} exact)`);
-    });
-
-    const hl = computeHighlights(activeGame.players, activeGame.rounds);
-    if (hl && count > 0) {
-      lines.push('');
-      lines.push('✨ Match Highlights:');
-      lines.push(`• Most Exact Calls: ${hl.mostExact.names} (${hl.mostExact.count}/${count})`);
-      lines.push(`• Biggest Round: ${hl.bestRound.player} (${hl.bestRound.notation}, R${hl.bestRound.roundNum})`);
-      lines.push(`• Best Jump: ${hl.bestJump.player} (${formatSigned(hl.bestJump.gain)} in ${hl.bestJump.label})`);
-      lines.push(`• Cleanest Streak: ${hl.cleanestStreak.names} (${hl.cleanestStreak.streak} in a row)`);
+    if (isRummyGameCompleted(activeGame.players, nextRounds)) {
+      setScreen('gameover');
+      showToast('Rummy match complete! 🏆', 'success');
+    } else {
+      setRummyScores(new Array(activeGame.players.length).fill(null));
+      setRummyTypes(new Array(activeGame.players.length).fill('manual'));
+      showToast(`Deal ${record.dealNumber} saved!`, 'success');
     }
-
-    navigator.clipboard?.writeText(lines.join('\n'));
-    showToast('WhatsApp summary copied!', 'success');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // Previews for setup
-  const r1Preview = getRoundMeta(0, starterIndex, initialDirection);
-  const r11Preview = getRoundMeta(10, starterIndex, initialDirection);
-  const activeSavedGame = games.find((g) => g.status === 'active');
-  const runningTotals = activeGame ? computeTotals(activeGame.rounds) : [0, 0, 0, 0, 0];
-  const maxRunningScore = Math.max(...runningTotals);
+  const undoRummyDeal = async () => {
+    if (!activeGame || rummyRounds.length === 0) return;
+    const lastDealNum = rummyRounds.length;
+    const popped = rummyRounds[rummyRounds.length - 1];
+    const nextRounds = rummyRounds.slice(0, -1);
+
+    await persistUniversalRounds(activeGame, nextRounds);
+    setScreen('play');
+    setViewTab('play');
+    setRummyScores([...popped.scores]);
+    setRummyTypes([...popped.types]);
+    showToast(`Reopened Deal ${lastDealNum}`);
+  };
+
+  // Previews
+  const r1Preview = getRoundMeta(0, trumpStarterIndex, trumpInitialDirection);
+  const r11Preview = getRoundMeta(10, trumpStarterIndex, trumpInitialDirection);
+
+  const activeSavedGame = games.find(
+    (g) => g.status === 'active' && g.game_type === selectedGameType
+  );
 
   return (
     <div className="app-shell">
       {/* =========================================================================
-         1. SETUP SCREEN
+         GLOBAL GAME HUB SELECTOR (Trump vs Rummy 240)
+         ========================================================================= */}
+      <header className="topbar">
+        <div className="topbar-inner">
+          <div className="topbar-row">
+            <div className="topbar-badges">
+              <span className="pill-round">🎴 Card Scorer Pro</span>
+              <span className={`pill-dir ${selectedGameType === 'trump' ? 'cw' : 'acw'}`}>
+                {selectedGameType === 'trump' ? '🃏 Trump (Judgement)' : '🎴 Rummy 240 Points'}
+              </span>
+              {syncState === 'saving' && <span className="pill-round" style={{ background: '#f59e0b', color: '#1c1917' }}>Saving…</span>}
+              {syncState === 'saved' && <span className="pill-round" style={{ background: '#10b981', color: '#fff' }}>Saved ✓</span>}
+            </div>
+
+            <div className="topbar-actions">
+              <button
+                className="top-icon-btn"
+                onClick={() => setScreen('setup')}
+                title="New / Setup Game"
+              >
+                +
+              </button>
+              <button
+                className="top-icon-btn"
+                onClick={() => setScreen('history')}
+                title="Past Games & Results"
+              >
+                📜
+              </button>
+              {activeGame && (
+                <button
+                  className="top-icon-btn"
+                  onClick={() => setShowSettings(true)}
+                  title="Options"
+                >
+                  ⚙
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* =========================================================================
+         1. SETUP & GAME SELECTOR SCREEN
          ========================================================================= */}
       {screen === 'setup' && (
         <div className="setup-bg">
           <div className="setup-wrap">
             <div className="brand-header">
-              <div className="brand-badge">♠ ♥ ♦ ♣ Tabletop Scorer</div>
-              <h1 className="brand-title">Trump Scorer</h1>
-              <p className="brand-sub">5 Players · 19 Rounds (10 → 1 → 10)</p>
+              <div className="brand-badge">♣ ♦ Tabletop Scorer Hub ♥ ♠</div>
+              <h1 className="brand-title">Select Card Game</h1>
+              <p className="brand-sub">Universal database roster · Authentic Indian paper notebook scorer</p>
+            </div>
+
+            {/* Game Selector Cards */}
+            <div className="hub-grid" style={{ marginBottom: 16 }}>
+              <div
+                className={`hub-card ${selectedGameType === 'trump' ? 'active' : ''}`}
+                onClick={() => setSelectedGameType('trump')}
+              >
+                <div>
+                  <div className="hub-icon">🃏</div>
+                  <h3 className="hub-title">Trump (Judgement)</h3>
+                  <p className="hub-desc">19 rounds (10→1→10), bidding & tricks, serving order & rotation reversal.</p>
+                </div>
+                <div className="hub-meta">5 Players · 19 Rounds</div>
+              </div>
+
+              <div
+                className={`hub-card ${selectedGameType === 'rummy240' ? 'active' : ''}`}
+                onClick={() => setSelectedGameType('rummy240')}
+              >
+                <div>
+                  <div className="hub-icon">🎴</div>
+                  <h3 className="hub-title">Indian Rummy 240</h3>
+                  <p className="hub-desc">240 Pool elimination, 0 show, 20 drop, 40 mid, 80 full count, last man standing.</p>
+                </div>
+                <div className="hub-meta">2–6 Players · 240 Pts Knockout</div>
+              </div>
             </div>
 
             {/* Resume Banner */}
             {activeSavedGame && (
               <div className="resume-banner">
                 <div className="resume-banner-text">
-                  <div className="resume-banner-title">Saved Game In Progress</div>
+                  <div className="resume-banner-title">Saved {selectedGameType === 'trump' ? 'Trump' : 'Rummy'} Game Active</div>
                   <div className="resume-banner-sub">
-                    Round {activeSavedGame.rounds.length + 1} / 19 · {activeSavedGame.players.map((p) => p.name).join(', ')}
+                    {activeSavedGame.players.map((p) => p.name).join(', ')} ·{' '}
+                    {selectedGameType === 'trump'
+                      ? `Round ${activeSavedGame.rounds.length + 1}/19`
+                      : `Deal ${activeSavedGame.rounds.length + 1}`}
                   </div>
                 </div>
                 <button className="btn-resume" onClick={() => resumeGame(activeSavedGame)}>
-                  Resume R{activeSavedGame.rounds.length + 1} →
+                  Resume →
                 </button>
               </div>
             )}
@@ -466,20 +645,23 @@ export default function TrumpScorerPage() {
               {/* Seating Order */}
               <div>
                 <div className="section-head">
-                  <h2 className="section-title">Players (Starting Play Order)</h2>
-                  <button
-                    className="section-hint"
-                    onClick={() => setManageRoster((v) => !v)}
-                  >
-                    {manageRoster ? 'Done' : 'Manage Roster'}
-                  </button>
+                  <h2 className="section-title">
+                    {selectedGameType === 'trump' ? 'Players (5 Seats)' : `Players (${rummySeats.length} Seats)`}
+                  </h2>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {selectedGameType === 'rummy240' && (
+                      <button className="section-hint" onClick={addRummySeat} disabled={rummySeats.length >= 6}>
+                        + Add Seat
+                      </button>
+                    )}
+                    <button className="section-hint" onClick={() => setManageRoster((v) => !v)}>
+                      {manageRoster ? 'Done' : 'Manage Roster'}
+                    </button>
+                  </div>
                 </div>
-                <p className="helper-copy">
-                  List players in your starting play order (Player 5 serves to Player 1 in Round 1).
-                </p>
 
                 <div className="seat-list">
-                  {seats.map((name, idx) => (
+                  {currentSeats.map((name, idx) => (
                     <div key={idx} className="seat-row">
                       <div className="seat-num">{idx + 1}</div>
                       <input
@@ -489,9 +671,9 @@ export default function TrumpScorerPage() {
                         value={name}
                         placeholder={`Player ${idx + 1}`}
                         onChange={(e) => {
-                          const next = [...seats];
+                          const next = [...currentSeats];
                           next[idx] = e.target.value;
-                          setSeats(next);
+                          setCurrentSeats(next);
                         }}
                       />
                       <div className="reorder-btns">
@@ -505,12 +687,22 @@ export default function TrumpScorerPage() {
                         </button>
                         <button
                           className="btn-icon-sm"
-                          disabled={idx === 4}
+                          disabled={idx === currentSeats.length - 1}
                           onClick={() => moveSeat(idx, 1)}
                           title="Move Down"
                         >
                           ▼
                         </button>
+                        {selectedGameType === 'rummy240' && rummySeats.length > 2 && (
+                          <button
+                            className="btn-icon-sm"
+                            style={{ color: 'var(--rose-600)' }}
+                            onClick={() => removeRummySeat(idx)}
+                            title="Remove Seat"
+                          >
+                            ✕
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -520,11 +712,11 @@ export default function TrumpScorerPage() {
                 {roster.length > 0 && (
                   <div style={{ marginTop: 10 }}>
                     <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--ink-500)', textTransform: 'uppercase' }}>
-                      Tap Saved Player to Fill Empty Seat ({roster.length}):
+                      Tap to Select Saved Players ({roster.length}):
                     </div>
                     <div className="roster-grid">
                       {roster.map((player) => {
-                        const seatIdx = seats.indexOf(player.name);
+                        const seatIdx = currentSeats.indexOf(player.name);
                         const isSelected = seatIdx !== -1;
                         return (
                           <div
@@ -561,7 +753,7 @@ export default function TrumpScorerPage() {
                     type="text"
                     className="seat-input"
                     style={{ background: 'var(--bg-subtle)', borderRadius: 10, padding: '7px 10px', fontSize: 13, border: '1px solid var(--border-soft)' }}
-                    placeholder="+ Add friend to permanent database roster…"
+                    placeholder="+ Add friend to permanent roster…"
                     value={newPlayerName}
                     onChange={(e) => setNewPlayerName(e.target.value)}
                     maxLength={32}
@@ -572,76 +764,108 @@ export default function TrumpScorerPage() {
                 </form>
               </div>
 
-              {/* Starter Selection */}
-              <div>
-                <div className="section-head">
-                  <h2 className="section-title">Who Goes 1st in Round 1?</h2>
-                </div>
-                <div className="pill-grid-5">
-                  {seats.map((name, idx) => (
-                    <button
-                      key={idx}
-                      className={`starter-pill ${starterIndex === idx ? 'active' : ''}`}
-                      onClick={() => setStarterIndex(idx)}
-                    >
-                      <span className="truncate">{name || `P${idx + 1}`}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Initial Rotation Direction */}
-              <div>
-                <div className="section-head">
-                  <h2 className="section-title">Initial Rotation Direction</h2>
-                </div>
-                <div className="segmented-2">
-                  <button
-                    className={`seg-btn ${initialDirection === 'CW' ? 'active-cw' : ''}`}
-                    onClick={() => setInitialDirection('CW')}
-                  >
-                    <span>↻ Clockwise</span>
-                    <span className="seg-sub">Flips to ↺ ACW after R10</span>
-                  </button>
-                  <button
-                    className={`seg-btn ${initialDirection === 'ACW' ? 'active-acw' : ''}`}
-                    onClick={() => setInitialDirection('ACW')}
-                  >
-                    <span>↺ Anti-Clockwise</span>
-                    <span className="seg-sub">Flips to ↻ CW after R10</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Live Preview Card */}
-              <div className="preview-card">
-                <div className="section-head" style={{ marginBottom: 6 }}>
-                  <h2 className="section-title">Round 1 Preview (10 Cards)</h2>
-                  <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--ink-500)' }}>
-                    {r1Preview.activeDir === 'CW' ? '↻ Clockwise' : '↺ Anti-Clockwise'}
-                  </span>
-                </div>
-                <div className="preview-grid">
-                  <div className="preview-role server">
-                    <div className="preview-role-label">🃏 Serving</div>
-                    <div className="preview-role-name truncate">{seats[r1Preview.serverIdx] || `P${r1Preview.serverIdx + 1}`}</div>
+              {/* Trump-specific Setup Controls */}
+              {selectedGameType === 'trump' && (
+                <>
+                  <div>
+                    <div className="section-head">
+                      <h2 className="section-title">Who Goes 1st in Round 1?</h2>
+                    </div>
+                    <div className="pill-grid-5">
+                      {trumpSeats.map((name, idx) => (
+                        <button
+                          key={idx}
+                          className={`starter-pill ${trumpStarterIndex === idx ? 'active' : ''}`}
+                          onClick={() => setTrumpStarterIndex(idx)}
+                        >
+                          <span className="truncate">{name || `P${idx + 1}`}</span>
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                  <div className="preview-role first">
-                    <div className="preview-role-label">▶ 1st Player</div>
-                    <div className="preview-role-name truncate">{seats[r1Preview.starterIdx] || `P${r1Preview.starterIdx + 1}`}</div>
-                  </div>
-                </div>
-                <div className="order-chain">
-                  {r1Preview.turnOrder.map((p) => seats[p] || `P${p + 1}`).join(' → ')}
-                </div>
-                <div className="reversal-note">
-                  🔄 Rotation reverses after Round 10 (1 card) → Round 11 ({r11Preview.activeDir === 'CW' ? '↻ CW' : '↺ ACW'}): 🃏 {seats[r11Preview.serverIdx] || `P${r11Preview.serverIdx + 1}`} serves to ▶ {seats[r11Preview.starterIdx] || `P${r11Preview.starterIdx + 1}`}
-                </div>
-              </div>
 
-              {/* Start Button */}
+                  <div>
+                    <div className="section-head">
+                      <h2 className="section-title">Initial Rotation Direction</h2>
+                    </div>
+                    <div className="segmented-2">
+                      <button
+                        className={`seg-btn ${trumpInitialDirection === 'CW' ? 'active-cw' : ''}`}
+                        onClick={() => setTrumpInitialDirection('CW')}
+                      >
+                        <span>↻ Clockwise</span>
+                        <span className="seg-sub">Flips to ↺ ACW after R10</span>
+                      </button>
+                      <button
+                        className={`seg-btn ${trumpInitialDirection === 'ACW' ? 'active-acw' : ''}`}
+                        onClick={() => setTrumpInitialDirection('ACW')}
+                      >
+                        <span>↺ Anti-Clockwise</span>
+                        <span className="seg-sub">Flips to ↻ CW after R10</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="preview-card">
+                    <div className="section-head" style={{ marginBottom: 6 }}>
+                      <h2 className="section-title">Round 1 Preview (10 Cards)</h2>
+                      <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--ink-500)' }}>
+                        {r1Preview.activeDir === 'CW' ? '↻ Clockwise' : '↺ Anti-Clockwise'}
+                      </span>
+                    </div>
+                    <div className="preview-grid">
+                      <div className="preview-role server">
+                        <div className="preview-role-label">🃏 Serving</div>
+                        <div className="preview-role-name truncate">{trumpSeats[r1Preview.serverIdx]}</div>
+                      </div>
+                      <div className="preview-role first">
+                        <div className="preview-role-label">▶ 1st Player</div>
+                        <div className="preview-role-name truncate">{trumpSeats[r1Preview.starterIdx]}</div>
+                      </div>
+                    </div>
+                    <div className="order-chain">
+                      {r1Preview.turnOrder.map((p) => trumpSeats[p]).join(' → ')}
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* Rummy 240 Setup Controls */}
+              {selectedGameType === 'rummy240' && (
+                <>
+                  <div>
+                    <div className="section-head">
+                      <h2 className="section-title">Who Deals 1st Hand?</h2>
+                    </div>
+                    <div className="pill-grid-5">
+                      {rummySeats.map((name, idx) => (
+                        <button
+                          key={idx}
+                          className={`starter-pill ${rummyDealerIndex === idx ? 'active' : ''}`}
+                          onClick={() => setRummyDealerIndex(idx)}
+                        >
+                          <span className="truncate">🃏 {name || `P${idx + 1}`}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="preview-card">
+                    <div className="section-head" style={{ marginBottom: 6 }}>
+                      <h2 className="section-title">Rummy 240 Pool Rules</h2>
+                    </div>
+                    <div style={{ fontSize: 12, lineHeight: 1.5, color: 'var(--ink-700)' }}>
+                      • <strong>Knockout Target:</strong> 240 Points. Reaching or crossing 240 eliminates the player.<br />
+                      • <strong>Winner of Deal:</strong> 0 penalty points (Show).<br />
+                      • <strong>First Drop:</strong> 20 points · <strong>Middle Drop:</strong> 40 points · <strong>Full Count:</strong> 80 points.<br />
+                      • <strong>Victory:</strong> Last surviving player wins the pool match!
+                    </div>
+                  </div>
+                </>
+              )}
+
               <button className="btn-primary-lg" onClick={handleStartGame}>
-                Start Game →
+                Start {selectedGameType === 'trump' ? 'Trump Scorer' : 'Rummy 240 Match'} →
               </button>
             </div>
           </div>
@@ -649,151 +873,88 @@ export default function TrumpScorerPage() {
       )}
 
       {/* =========================================================================
-         2. ACTIVE PLAY SCREEN
+         2. ACTIVE PLAY SCREEN — TRUMP (JUDGEMENT)
          ========================================================================= */}
-      {screen === 'play' && activeGame && currentMeta && (
+      {screen === 'play' && activeGame && activeGame.game_type === 'trump' && currentTrumpMeta && (
         <>
-          <header className="topbar">
-            <div className="topbar-inner">
-              <div className="topbar-row">
-                <div className="topbar-badges">
-                  <span className="pill-round tabular">Round {currentMeta.roundNumber} / 19</span>
-                  <span className="pill-cards tabular">🃏 {currentMeta.cards} {currentMeta.cards === 1 ? 'Card' : 'Cards'}</span>
-                  <span className={`pill-dir ${currentMeta.activeDir === 'CW' ? 'cw' : 'acw'}`}>
-                    {currentMeta.activeDir === 'CW' ? '↻ CW' : '↺ ACW'}
-                  </span>
-                </div>
-                <div className="topbar-actions">
-                  <button
-                    className="top-icon-btn"
-                    disabled={activeGame.rounds.length === 0}
-                    onClick={undoLastRound}
-                    title="Undo Last Round"
-                  >
-                    ↩
-                  </button>
-                  <button className="top-icon-btn" onClick={() => setShowSchedule(true)} title="Schedule">
-                    📅
-                  </button>
-                  <button className="top-icon-btn" onClick={() => setShowSettings(true)} title="Settings">
-                    ⚙
-                  </button>
-                </div>
-              </div>
+          <div className="tab-bar">
+            <div className="tab-bar-inner">
+              <button
+                className={`tab-btn ${viewTab === 'play' ? 'active' : ''}`}
+                onClick={() => setViewTab('play')}
+              >
+                🎴 Play Round
+              </button>
+              <button
+                className={`tab-btn ${viewTab === 'sheet' ? 'active' : ''}`}
+                onClick={() => setViewTab('sheet')}
+              >
+                📓 Score Sheet ({trumpRounds.length}/19)
+              </button>
+            </div>
+          </div>
 
-              {/* 19-Round Progress Strip */}
-              <div className="progress-strip">
+          <main className="workspace">
+            <section className={`pane-play ${viewTab === 'play' ? '' : 'mobile-hidden'}`}>
+              {/* Stepper Strip */}
+              <div className="progress-strip" style={{ marginBottom: 10 }}>
                 {ROUND_CARDS.map((cnt, idx) => {
                   let cls = '';
-                  if (idx === currentRoundIdx) cls = 'current';
-                  else if (idx < activeGame.rounds.length) cls = idx >= 10 ? 'done-2' : 'done-1';
+                  if (idx === trumpRounds.length) cls = 'current';
+                  else if (idx < trumpRounds.length) cls = idx >= 10 ? 'done-2' : 'done-1';
                   return (
-                    <div key={idx} className={`prog-step ${cls} tabular`} title={`R${idx + 1}: ${cnt} cards`}>
+                    <div key={idx} className={`prog-step ${cls} tabular`}>
                       {cnt}
                     </div>
                   );
                 })}
               </div>
-            </div>
 
-            {/* Mobile Tab Bar */}
-            <div className="tab-bar">
-              <div className="tab-bar-inner">
-                <button
-                  className={`tab-btn ${viewTab === 'play' ? 'active' : ''}`}
-                  onClick={() => setViewTab('play')}
-                >
-                  🎴 Play Round
-                </button>
-                <button
-                  className={`tab-btn ${viewTab === 'sheet' ? 'active' : ''}`}
-                  onClick={() => setViewTab('sheet')}
-                >
-                  📓 Score Sheet ({activeGame.rounds.length}/19)
-                </button>
-              </div>
-            </div>
-          </header>
-
-          <main className="workspace">
-            {/* Play Round Pane */}
-            <section className={`pane-play ${viewTab === 'play' ? '' : 'mobile-hidden'}`}>
-              {/* Rotation Reversal Banners */}
-              {currentMeta.roundIdx === 10 && (
-                <div className="reversal-banner-big">
-                  <span>🔄 Rotation Reversed! Now playing {currentMeta.activeDir === 'CW' ? '↻ Clockwise' : '↺ Anti-Clockwise'}</span>
-                  <span>R11</span>
-                </div>
-              )}
-              {currentMeta.roundIdx > 10 && (
-                <div className="reversal-banner-subtle">
-                  🔄 Reversed Rotation Active · {currentMeta.activeDir === 'CW' ? '↻ Clockwise' : '↺ Anti-Clockwise'}
-                </div>
-              )}
-
-              {/* Role Strip: Serving & 1st Player */}
+              {/* Role Strip */}
               <div className="role-strip">
                 <div className="role-box server">
                   <span className="role-icon">🃏</span>
                   <div className="role-meta">
                     <div className="role-kicker">Serving</div>
-                    <div className="role-name truncate">{activeGame.players[currentMeta.serverIdx].name}</div>
+                    <div className="role-name truncate">{activeGame.players[currentTrumpMeta.serverIdx].name}</div>
                   </div>
                 </div>
                 <div className="role-box first">
                   <span className="role-icon">▶</span>
                   <div className="role-meta">
                     <div className="role-kicker">1st Player</div>
-                    <div className="role-name truncate">{activeGame.players[currentMeta.starterIdx].name}</div>
+                    <div className="role-name truncate">{activeGame.players[currentTrumpMeta.starterIdx].name}</div>
                   </div>
                 </div>
               </div>
 
-              {/* Live Mini-Standings Bar */}
-              <div className="standings-mini">
-                {activeGame.players.map((p, idx) => {
-                  const sc = runningTotals[idx];
-                  const isLeader = activeGame.rounds.length > 0 && sc === maxRunningScore;
-                  const cls = sc > 0 ? 'score-pos' : sc < 0 ? 'score-neg' : 'score-zero';
-                  return (
-                    <div key={p.id} className={`mini-card ${isLeader ? 'leader' : ''}`}>
-                      <div className="mini-name">
-                        {isLeader ? '👑 ' : ''}
-                        <span className="truncate">{p.name}</span>
-                      </div>
-                      <div className={`mini-score tabular ${cls}`}>{formatSigned(sc)}</div>
-                    </div>
-                  );
-                })}
-              </div>
-
               {/* Phase Stepper */}
               <div className="phase-stepper">
-                <div className={`phase-step ${phase === 'bidding' ? 'active' : 'done'}`}>
-                  {phase === 'bidding' ? '1. Bidding (Calls)' : '✓ 1. Bids Confirmed'}
+                <div className={`phase-step ${trumpPhase === 'bidding' ? 'active' : 'done'}`}>
+                  {trumpPhase === 'bidding' ? '1. Bidding (Calls)' : '✓ 1. Bids Confirmed'}
                 </div>
-                <div className={`phase-step ${phase === 'scoring' ? 'active' : ''}`}>
+                <div className={`phase-step ${trumpPhase === 'scoring' ? 'active' : ''}`}>
                   2. Tricks Won
                 </div>
               </div>
 
-              {/* 5 Turn Cards in Play Order */}
+              {/* Turn Cards */}
               <div className="player-cards">
-                {currentMeta.turnOrder.map((pIdx, pos) => {
+                {currentTrumpMeta.turnOrder.map((pIdx, pos) => {
                   const player = activeGame.players[pIdx];
                   const isFirst = pos === 0;
                   const isServer = pos === 4;
-                  const isActive = activePlayerIdx === pIdx;
-                  const bidVal = currentBids[pIdx];
-                  const wonVal = currentWons[pIdx];
+                  const isActive = trumpActivePlayerIdx === pIdx;
+                  const bidVal = trumpBids[pIdx];
+                  const wonVal = trumpWons[pIdx];
                   const circleCls = isFirst ? 'first' : isServer ? 'server' : isActive ? 'active-num' : '';
 
-                  const nums = Array.from({ length: currentMeta.cards + 1 }, (_, n) => n);
-                  const gridClass = currentMeta.cards <= 3 ? 'cols-4' : currentMeta.cards <= 4 ? 'cols-5' : '';
+                  const nums = Array.from({ length: currentTrumpMeta.cards + 1 }, (_, n) => n);
+                  const gridClass = currentTrumpMeta.cards <= 3 ? 'cols-4' : currentTrumpMeta.cards <= 4 ? 'cols-5' : '';
 
                   return (
                     <div key={player.id} className={`player-card ${isActive ? 'active' : ''}`}>
-                      <button className="player-card-header" onClick={() => setActivePlayerIdx(pIdx)}>
+                      <button className="player-card-header" onClick={() => setTrumpActivePlayerIdx(pIdx)}>
                         <div className="player-left">
                           <div className={`turn-circle ${circleCls}`}>{pos + 1}</div>
                           <div className="player-info">
@@ -802,22 +963,11 @@ export default function TrumpScorerPage() {
                               {isFirst && <span className="badge-role badge-first">▶ 1st</span>}
                               {isServer && <span className="badge-role badge-server">🃏 Serving</span>}
                             </div>
-                            <div className="player-subline tabular">
-                              {phase === 'bidding' ? (
-                                <span>Running Total: <strong>{formatSigned(runningTotals[pIdx])}</strong></span>
-                              ) : wonVal !== null ? (
-                                <span>
-                                  New Total: <strong>{formatSigned(runningTotals[pIdx] + scoreEntry(bidVal ?? 0, wonVal).delta)}</strong>
-                                </span>
-                              ) : (
-                                <span>Current: {formatSigned(runningTotals[pIdx])}</span>
-                              )}
-                            </div>
                           </div>
                         </div>
 
                         <div className="player-right">
-                          {phase === 'bidding' ? (
+                          {trumpPhase === 'bidding' ? (
                             <div className={`val-box tabular ${bidVal !== null ? 'filled-bid' : isActive ? 'empty-active' : 'empty'}`}>
                               {bidVal !== null ? bidVal : '—'}
                             </div>
@@ -837,50 +987,44 @@ export default function TrumpScorerPage() {
                         </div>
                       </button>
 
-                      {/* Tap Drawer for Active Player */}
                       {isActive && (
                         <div className="tap-drawer">
                           <div className="tap-drawer-head">
                             <span className="tap-prompt">
-                              {phase === 'bidding'
-                                ? `Tap Bid for ${player.name} (0–${currentMeta.cards})`
+                              {trumpPhase === 'bidding'
+                                ? `Tap Bid for ${player.name} (0–${currentTrumpMeta.cards})`
                                 : `Tap Tricks Won (${player.name})`}
                             </span>
-                            {phase === 'scoring' && currentWons.some((v) => v === null) && totalWons <= currentMeta.cards && (
-                              <button className="btn-rest-zero" onClick={setRestToZero}>
-                                Set rest to 0
-                              </button>
-                            )}
                           </div>
 
                           <div className={`num-grid ${gridClass}`}>
                             {nums.map((n) => {
-                              if (phase === 'bidding') {
+                              if (trumpPhase === 'bidding') {
                                 return (
                                   <button
                                     key={n}
                                     className={`num-btn tabular ${bidVal === n ? 'selected-bid' : ''}`}
-                                    onClick={() => tapBid(pIdx, n)}
+                                    onClick={() => {
+                                      const next = [...trumpBids];
+                                      next[pIdx] = n;
+                                      setTrumpBids(next);
+                                    }}
                                   >
                                     {n}
                                   </button>
                                 );
                               } else {
-                                const otherSum = currentWons.reduce<number>((s, v, idx) => s + (idx === pIdx ? 0 : (v ?? 0)), 0);
-                                const otherEmpty = currentWons.filter((v, idx) => idx !== pIdx && v === null).length;
-                                const remainingForPlayer = currentMeta.cards - otherSum;
-                                const isExact = otherEmpty === 0 && remainingForPlayer === n && wonVal !== n;
-                                const disabled = n > remainingForPlayer && wonVal !== n;
-
                                 return (
                                   <button
                                     key={n}
-                                    disabled={disabled}
-                                    className={`num-btn tabular ${wonVal === n ? 'selected-won' : ''} ${isExact ? 'exact-hint' : ''}`}
-                                    onClick={() => tapWon(pIdx, n)}
+                                    className={`num-btn tabular ${wonVal === n ? 'selected-won' : ''}`}
+                                    onClick={() => {
+                                      const next = [...trumpWons];
+                                      next[pIdx] = n;
+                                      setTrumpWons(next);
+                                    }}
                                   >
-                                    <span>{n}</span>
-                                    {isExact && <span className="exact-tag">Exact</span>}
+                                    {n}
                                   </button>
                                 );
                               }
@@ -893,34 +1037,37 @@ export default function TrumpScorerPage() {
                 })}
               </div>
 
-              {/* Sticky Bottom Action Footer */}
+              {/* Action Footer */}
               <div className="sticky-footer">
                 <div className="sticky-footer-inner">
-                  {phase === 'bidding' ? (
+                  {trumpPhase === 'bidding' ? (
                     <>
-                      <div className="footer-status tabular">Total Bids: {totalBids} / {currentMeta.cards}</div>
+                      <div className="footer-status tabular">Total Calls: {totalTrumpBids} / {currentTrumpMeta.cards}</div>
                       <button
                         className="btn-confirm-footer"
-                        disabled={!allBidsDone}
-                        onClick={lockBidsAndPlay}
+                        disabled={!allTrumpBidsDone}
+                        onClick={() => {
+                          setTrumpPhase('scoring');
+                          setTrumpActivePlayerIdx(currentTrumpMeta.starterIdx);
+                        }}
                       >
-                        {allBidsDone ? 'Confirm Bids & Start Round →' : 'Tap Bids for All 5'}
+                        {allTrumpBidsDone ? 'Lock Calls & Score Tricks →' : 'Tap Bids for All 5'}
                       </button>
                     </>
                   ) : (
                     <>
-                      <button className="btn-secondary-md" onClick={() => setPhase('bidding')}>
-                        ← Edit Bids
+                      <button className="btn-secondary-md" onClick={() => setTrumpPhase('bidding')}>
+                        ← Bids
                       </button>
-                      <div className={`footer-status tabular ${totalWons === currentMeta.cards && allWonsDone ? 'ok' : totalWons > currentMeta.cards ? 'warn' : ''}`}>
-                        Tricks: {totalWons} / {currentMeta.cards} {totalWons === currentMeta.cards && allWonsDone ? '✓' : ''}
+                      <div className={`footer-status tabular ${totalTrumpWons === currentTrumpMeta.cards ? 'ok' : 'warn'}`}>
+                        Tricks: {totalTrumpWons} / {currentTrumpMeta.cards}
                       </div>
                       <button
                         className="btn-confirm-footer"
-                        disabled={!allWonsDone || totalWons !== currentMeta.cards}
-                        onClick={confirmRound}
+                        disabled={!allTrumpWonsDone || totalTrumpWons !== currentTrumpMeta.cards}
+                        onClick={confirmTrumpRound}
                       >
-                        {currentMeta.roundNumber === 19 ? 'Save Final Round 🏆' : 'Save Round →'}
+                        Save Round →
                       </button>
                     </>
                   )}
@@ -928,104 +1075,47 @@ export default function TrumpScorerPage() {
               </div>
             </section>
 
-            {/* Score Sheet Pane */}
+            {/* Trump Notebook Sheet */}
             <aside className={`pane-sheet ${viewTab === 'sheet' ? '' : 'mobile-hidden'}`}>
               <div className="notebook-shell">
                 <div className="notebook-topbar">
-                  <span className="notebook-title">📓 Score Sheet ({activeGame.rounds.length}/19)</span>
-                  <div className="notebook-legend">
-                    <span className="cell-hit">+Hit</span>
-                    <span className="cell-zero">0+0</span>
-                    <span className="cell-miss">-Miss</span>
-                    <span style={{ color: 'var(--ink-500)' }}>▶ 1st · 🃏 Srv</span>
-                  </div>
+                  <span className="notebook-title">📓 Trump Score Sheet</span>
+                  <span>{trumpRounds.length}/19</span>
                 </div>
-
                 <div className="notebook-scroll">
                   <table className="notebook-table">
                     <thead>
                       <tr>
                         {activeGame.players.map((p) => (
-                          <th key={p.id} className="truncate" title={p.name}>{p.name}</th>
+                          <th key={p.id}>{p.name}</th>
                         ))}
                         <th className="col-cards">Cards</th>
                       </tr>
                     </thead>
                     <tbody>
                       {ROUND_CARDS.map((cards, rIdx) => {
-                        const completed = activeGame.rounds[rIdx];
-                        const isCurrent = rIdx === currentRoundIdx;
-                        const rMeta = getRoundMeta(rIdx, activeGame.first_player_idx, activeGame.initial_dir);
-
-                        const cells = activeGame.players.map((_, pIdx) => {
-                          const marker = pIdx === rMeta.starterIdx ? '▶' : pIdx === rMeta.serverIdx ? '🃏' : '';
-                          if (!completed) {
-                            return (
-                              <td key={pIdx} className="sheet-cell cell-empty">
-                                {marker && <span className="cell-marker">{marker}</span>}
-                                {isCurrent ? '•' : ''}
-                              </td>
-                            );
-                          }
-                          const e = scoreEntry(completed.bids[pIdx], completed.won[pIdx]);
-                          const cls = e.status === 'hit' ? 'cell-hit' : e.status === 'zero' ? 'cell-zero' : 'cell-miss';
-                          return (
-                            <td key={pIdx} className={`sheet-cell ${cls} tabular`}>
-                              {marker && <span className="cell-marker">{marker}</span>}
-                              {e.notation}
-                            </td>
-                          );
-                        });
-
-                        const showSubtotal = SUBTOTAL_CHECKPOINTS[rIdx];
-                        const reached = activeGame.rounds.length > rIdx;
-                        const subtotalScores = reached ? computeTotals(activeGame.rounds, rIdx + 1) : null;
-                        const isFinal = rIdx === 18;
-
+                        const completed = trumpRounds[rIdx];
+                        const isCurrent = rIdx === trumpRounds.length;
                         return (
-                          <React.Fragment key={rIdx}>
-                            {rIdx === 10 && (
-                              <tr className="row-reversal">
-                                <td colSpan={6}>
-                                  🔄 ROTATION REVERSED ({activeGame.initial_dir === 'CW' ? '↻ CW → ↺ ACW' : '↺ ACW → ↻ CW'})
+                          <tr
+                            key={rIdx}
+                            className={completed ? 'sheet-row-done' : isCurrent ? 'sheet-row-current' : ''}
+                          >
+                            {activeGame.players.map((_, pIdx) => {
+                              if (!completed) return <td key={pIdx} className="sheet-cell cell-empty">•</td>;
+                              const e = scoreEntry(completed.bids[pIdx], completed.won[pIdx]);
+                              return (
+                                <td key={pIdx} className={`sheet-cell ${e.hit ? 'cell-hit' : 'cell-miss'} tabular`}>
+                                  {e.notation}
                                 </td>
-                              </tr>
-                            )}
-                            <tr
-                              className={`${completed ? 'sheet-row-done' : isCurrent ? 'sheet-row-current' : ''}`}
-                              onClick={() => completed && openEditRound(rIdx)}
-                              title={completed ? `Tap to edit Round ${rIdx + 1}` : ''}
-                            >
-                              {cells}
-                              <td className="col-cards tabular">
-                                {cards}
-                                <span className="col-cards-sub">R{rIdx + 1}</span>
-                              </td>
-                            </tr>
-                            {showSubtotal && (
-                              <tr className={isFinal ? 'row-final' : 'row-subtotal'}>
-                                {activeGame.players.map((_, pIdx) => {
-                                  if (!subtotalScores) return <td key={pIdx} style={{ color: '#94a3b8' }}>—</td>;
-                                  const val = subtotalScores[pIdx];
-                                  const cls = val > 0 ? 'score-pos' : val < 0 ? 'score-neg' : 'score-zero';
-                                  return (
-                                    <td key={pIdx} className={`tabular ${cls}`}>
-                                      {formatSigned(val)}
-                                    </td>
-                                  );
-                                })}
-                                <td className="col-cards">{isFinal ? 'TOT' : 'SUB'}</td>
-                              </tr>
-                            )}
-                          </React.Fragment>
+                              );
+                            })}
+                            <td className="col-cards tabular">{cards}</td>
+                          </tr>
                         );
                       })}
                     </tbody>
                   </table>
-                </div>
-
-                <div className="sheet-tip">
-                  💡 Tap any completed round row to edit bids or tricks — all subtotals recalculate instantly.
                 </div>
               </div>
             </aside>
@@ -1034,213 +1124,361 @@ export default function TrumpScorerPage() {
       )}
 
       {/* =========================================================================
-         3. GAME OVER PODIUM & HIGHLIGHTS
+         2B. ACTIVE PLAY SCREEN — RUMMY 240 POINTS
          ========================================================================= */}
-      {screen === 'gameover' && activeGame && (
+      {screen === 'play' && activeGame && activeGame.game_type === 'rummy240' && (
         <>
-          {(() => {
-            const totals = computeTotals(activeGame.rounds);
-            const ranked = rankPlayers(activeGame.players, totals, activeGame.rounds);
-            const winners = ranked.filter((p) => p.rank === 1);
-            const winnerTitle = winners.map((w) => w.name).join(' & ');
-            const hl = computeHighlights(activeGame.players, activeGame.rounds);
+          <div className="tab-bar">
+            <div className="tab-bar-inner">
+              <button
+                className={`tab-btn ${viewTab === 'play' ? 'active' : ''}`}
+                onClick={() => setViewTab('play')}
+              >
+                🎴 Deal #{rummyRounds.length + 1}
+              </button>
+              <button
+                className={`tab-btn ${viewTab === 'sheet' ? 'active' : ''}`}
+                onClick={() => setViewTab('sheet')}
+              >
+                📓 Score Sheet ({rummyRounds.length} Deals)
+              </button>
+            </div>
+          </div>
 
-            return (
-              <>
-                <div className="podium-hero">
-                  <div className="podium-trophy">🏆</div>
-                  <div className="podium-kicker">
-                    19 Rounds Complete · {activeGame.initial_dir === 'CW' ? '↻ CW → ↺ ACW' : '↺ ACW → ↻ CW'}
-                  </div>
-                  <h1 className="podium-winner">{winnerTitle} {winners.length > 1 ? 'Tie!' : 'Wins!'}</h1>
-                  <p className="podium-score tabular">Winning Score: {formatSigned(winners[0].score)} points</p>
-                </div>
-
-                <div className="podium-body">
-                  <div className="card-box">
-                    <div className="section-head" style={{ marginBottom: 0 }}>
-                      <h2 className="section-title">Final Standings</h2>
-                      <button className="btn-icon-sm" style={{ width: 'auto', padding: '0 10px', fontSize: 12 }} onClick={() => setShowSchedule(true)}>
-                        📅 Schedule
-                      </button>
+          <main className="workspace">
+            <section className={`pane-play ${viewTab === 'play' ? '' : 'mobile-hidden'}`}>
+              {/* Standings Bar */}
+              <div className="standings-mini" style={{ gridTemplateColumns: `repeat(${activeGame.players.length}, 1fr)` }}>
+                {activeGame.players.map((p, idx) => {
+                  const s = rummyStatuses[idx];
+                  return (
+                    <div key={p.id} className={`mini-card ${s?.isEliminated ? 'elim-row' : ''}`}>
+                      <div className="mini-name truncate">{p.name}</div>
+                      <div className="mini-score tabular" style={{ color: s?.isEliminated ? 'var(--rose-600)' : 'var(--felt-900)' }}>
+                        {s?.cumulativeScore ?? 0}
+                      </div>
+                      {s?.isEliminated && <div className="elim-badge">OUT</div>}
                     </div>
+                  );
+                })}
+              </div>
 
-                    <div className="rank-list">
-                      {ranked.map((p) => (
-                        <div key={p.name} className={`rank-row ${p.rank === 1 ? 'first' : ''}`}>
-                          <div className="rank-left">
-                            <div className="rank-badge">{p.rank === 1 ? '🥇' : p.rank === 2 ? '🥈' : p.rank === 3 ? '🥉' : `#${p.rank}`}</div>
-                            <div style={{ minWidth: 0 }}>
-                              <div className="player-name truncate">{p.name}</div>
-                              <div style={{ fontSize: 12, color: 'var(--ink-500)' }}>
-                                {p.exactHits}/19 exact calls · {p.misses} misses
-                              </div>
+              {/* Rummy Player Cards */}
+              <div className="player-cards" style={{ marginTop: 10 }}>
+                {activeGame.players.map((p, idx) => {
+                  const status = rummyStatuses[idx];
+                  const currentPenalty = rummyScores[idx];
+                  const currentType = rummyTypes[idx];
+                  const isEliminated = status?.isEliminated;
+
+                  return (
+                    <div key={p.id} className={`player-card ${isEliminated ? 'elim-row' : ''}`}>
+                      <div className="player-card-header">
+                        <div className="player-left">
+                          <div className="turn-circle">{idx + 1}</div>
+                          <div className="player-info">
+                            <div className="player-name-row">
+                              <span className="player-name">{p.name}</span>
+                              {isEliminated && <span className="elim-badge">OUT (240+)</span>}
+                            </div>
+                            <div className="player-subline">
+                              <span>Total: <strong>{status?.cumulativeScore ?? 0} pts</strong></span>
+                              {currentPenalty !== null && !isEliminated && (
+                                <span style={{ color: currentPenalty === 0 ? 'var(--felt-700)' : 'var(--rose-600)' }}>
+                                  → Deal: +{currentPenalty} (New: {(status?.cumulativeScore ?? 0) + currentPenalty})
+                                </span>
+                              )}
                             </div>
                           </div>
-                          <div className={`tabular ${p.score > 0 ? 'score-pos' : p.score < 0 ? 'score-neg' : 'score-zero'}`} style={{ fontSize: 21, fontWeight: 900 }}>
-                            {formatSigned(p.score)}
+                        </div>
+
+                        {!isEliminated && (
+                          <div className="player-right">
+                            <div className={`val-box tabular ${currentPenalty === 0 ? 'filled-bid' : currentPenalty !== null ? 'filled-won' : 'empty'}`}>
+                              {currentPenalty !== null ? `+${currentPenalty}` : '—'}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Quick Rummy 240 scoring buttons */}
+                      {!isEliminated && (
+                        <div className="tap-drawer" style={{ paddingTop: 6 }}>
+                          <div className="rummy-btn-row">
+                            <button
+                              className={`rummy-quick-btn btn-show ${currentType === 'show' ? 'selected' : ''}`}
+                              onClick={() => setRummyScoreQuick(idx, 0, 'show')}
+                            >
+                              <span>🏆 Show</span>
+                              <span style={{ fontSize: 10 }}>0 pts</span>
+                            </button>
+                            <button
+                              className={`rummy-quick-btn btn-drop ${currentType === 'drop' ? 'selected' : ''}`}
+                              onClick={() => setRummyScoreQuick(idx, RUMMY_FIRST_DROP, 'drop')}
+                            >
+                              <span>🚪 1st Drop</span>
+                              <span style={{ fontSize: 10 }}>20 pts</span>
+                            </button>
+                            <button
+                              className={`rummy-quick-btn btn-mid ${currentType === 'middle' ? 'selected' : ''}`}
+                              onClick={() => setRummyScoreQuick(idx, RUMMY_MIDDLE_DROP, 'middle')}
+                            >
+                              <span>🏃 Mid Drop</span>
+                              <span style={{ fontSize: 10 }}>40 pts</span>
+                            </button>
+                            <button
+                              className={`rummy-quick-btn btn-full ${currentType === 'full' ? 'selected' : ''}`}
+                              onClick={() => setRummyScoreQuick(idx, RUMMY_FULL_COUNT, 'full')}
+                            >
+                              <span>💥 Full Count</span>
+                              <span style={{ fontSize: 10 }}>80 pts</span>
+                            </button>
+                          </div>
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+                            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-500)' }}>Manual Count:</span>
+                            <input
+                              type="number"
+                              min={0}
+                              max={80}
+                              className="seat-input"
+                              style={{ maxWidth: 80, padding: '4px 8px', background: '#fff', border: '1px solid var(--border-soft)', borderRadius: 8, textAlign: 'center' }}
+                              placeholder="0..80"
+                              value={currentType === 'manual' && currentPenalty !== null ? currentPenalty : ''}
+                              onChange={(e) => {
+                                const val = parseInt(e.target.value, 10);
+                                if (!isNaN(val) && val >= 0 && val <= 80) {
+                                  setRummyScoreQuick(idx, val, 'manual');
+                                }
+                              }}
+                            />
                           </div>
                         </div>
-                      ))}
+                      )}
                     </div>
-                  </div>
+                  );
+                })}
+              </div>
 
-                  {/* Highlights Grid */}
-                  {hl && (
-                    <div className="card-box">
-                      <div className="section-head" style={{ marginBottom: 0 }}>
-                        <h2 className="section-title">Match Highlights</h2>
-                      </div>
-                      <div className="highlights-grid">
-                        <div className="stat-tile">
-                          <div className="stat-label">🎯 Most Exact Calls</div>
-                          <div className="stat-value truncate">{hl.mostExact.names}</div>
-                          <div className="stat-detail">{hl.mostExact.count} / 19 exact bids hit</div>
-                        </div>
-                        <div className="stat-tile">
-                          <div className="stat-label">🔥 Biggest Single Round</div>
-                          <div className="stat-value truncate">{hl.bestRound.player}</div>
-                          <div className="stat-detail">{hl.bestRound.notation} ({formatSigned(hl.bestRound.delta)}) in Round {hl.bestRound.roundNum}</div>
-                        </div>
-                        <div className="stat-tile">
-                          <div className="stat-label">🚀 Best Subtotal Jump</div>
-                          <div className="stat-value truncate">{hl.bestJump.player}</div>
-                          <div className="stat-detail">{formatSigned(hl.bestJump.gain)} pts in {hl.bestJump.label}</div>
-                        </div>
-                        <div className="stat-tile">
-                          <div className="stat-label">✨ Cleanest Streak</div>
-                          <div className="stat-value truncate">{hl.cleanestStreak.names}</div>
-                          <div className="stat-detail">{hl.cleanestStreak.streak} in a row · {hl.cleanestStreak.fewestMissesGlobal} min misses</div>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Actions */}
-                  <div className="action-grid">
-                    <button className="btn-action-card emerald" onClick={copySummary}>
-                      📋 Copy WhatsApp Summary
-                    </button>
-                    <button className="btn-action-card" onClick={() => setGameOverShowSheet((v) => !v)}>
-                      {gameOverShowSheet ? 'Hide Score Sheet ▲' : '📓 View Score Sheet ▼'}
-                    </button>
-                    <button className="btn-action-card" onClick={undoLastRound}>
-                      ↩ Undo Round 19
-                    </button>
-                    <button
-                      className="btn-action-card emerald"
-                      onClick={() => {
-                        setSeats(activeGame.players.map((p) => p.name));
-                        setScreen('setup');
-                      }}
-                    >
-                      🔄 Play Again
-                    </button>
-                  </div>
-
-                  {/* Toggleable Score Sheet */}
-                  {gameOverShowSheet && (
-                    <div className="notebook-shell" style={{ marginTop: 12 }}>
-                      <div className="notebook-topbar">
-                        <span className="notebook-title">📓 Final 19-Round Score Sheet</span>
-                      </div>
-                      <div className="notebook-scroll">
-                        <table className="notebook-table">
-                          <thead>
-                            <tr>
-                              {activeGame.players.map((p) => (
-                                <th key={p.id}>{p.name}</th>
-                              ))}
-                              <th className="col-cards">Cards</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {activeGame.rounds.map((r, rIdx) => (
-                              <tr key={rIdx} className="sheet-row-done" onClick={() => openEditRound(rIdx)}>
-                                {r.bids.map((b, pIdx) => {
-                                  const res = scoreEntry(b, r.won[pIdx]);
-                                  const cls = res.status === 'hit' ? 'cell-hit' : res.status === 'zero' ? 'cell-zero' : 'cell-miss';
-                                  return (
-                                    <td key={pIdx} className={`sheet-cell ${cls} tabular`}>
-                                      {res.notation}
-                                    </td>
-                                  );
-                                })}
-                                <td className="col-cards tabular">{r.cards}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  )}
+              {/* Footer */}
+              <div className="sticky-footer">
+                <div className="sticky-footer-inner">
+                  <button className="btn-secondary-md" onClick={undoRummyDeal} disabled={rummyRounds.length === 0}>
+                    ↩ Undo Deal
+                  </button>
+                  <button className="btn-confirm-footer" onClick={confirmRummyDeal}>
+                    Save Deal #{rummyRounds.length + 1} →
+                  </button>
                 </div>
-              </>
-            );
-          })()}
+              </div>
+            </section>
+
+            {/* Rummy Score Sheet */}
+            <aside className={`pane-sheet ${viewTab === 'sheet' ? '' : 'mobile-hidden'}`}>
+              <div className="notebook-shell">
+                <div className="notebook-topbar">
+                  <span className="notebook-title">📓 Rummy 240 Score Sheet</span>
+                  <span style={{ fontSize: 11, color: 'var(--ink-500)' }}>Target: 240 Pts</span>
+                </div>
+                <div className="notebook-scroll">
+                  <table className="notebook-table">
+                    <thead>
+                      <tr>
+                        {activeGame.players.map((p) => (
+                          <th key={p.id}>{p.name}</th>
+                        ))}
+                        <th className="col-cards">Deal</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rummyRounds.length === 0 ? (
+                        <tr>
+                          <td colSpan={activeGame.players.length + 1} style={{ padding: 20, color: '#94a3b8' }}>
+                            No deals completed yet. Tap 0 for show, 20/40 for drop, 80 for full count.
+                          </td>
+                        </tr>
+                      ) : (
+                        rummyRounds.map((rd, rIdx) => {
+                          const cumTotals = computeRummyTotals(activeGame.players, rummyRounds, rIdx + 1);
+                          return (
+                            <tr key={rIdx} className="sheet-row-done">
+                              {activeGame.players.map((_, pIdx) => {
+                                const sc = rd.scores[pIdx];
+                                const cum = cumTotals[pIdx];
+                                const isOut = cum >= RUMMY_MAX_POINTS;
+                                return (
+                                  <td key={pIdx} className="sheet-cell tabular" style={{ color: isOut ? 'var(--rose-600)' : sc === 0 ? 'var(--felt-700)' : 'var(--ink-900)' }}>
+                                    <div style={{ fontSize: 13, fontWeight: 800 }}>+{sc}</div>
+                                    <div style={{ fontSize: 10, color: 'var(--ink-500)' }}>({cum})</div>
+                                  </td>
+                                );
+                              })}
+                              <td className="col-cards tabular">D{rIdx + 1}</td>
+                            </tr>
+                          );
+                        })
+                      )}
+                      {/* Running Total row */}
+                      {rummyRounds.length > 0 && (
+                        <tr className="row-final">
+                          {activeGame.players.map((_, pIdx) => {
+                            const isOut = rummyTotals[pIdx] >= RUMMY_MAX_POINTS;
+                            return (
+                              <td key={pIdx} className="tabular" style={{ color: isOut ? 'var(--rose-600)' : 'var(--felt-800)' }}>
+                                {rummyTotals[pIdx]} {isOut ? '❌' : ''}
+                              </td>
+                            );
+                          })}
+                          <td className="col-cards">TOT</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </aside>
+          </main>
         </>
       )}
 
       {/* =========================================================================
-         SCHEDULE MODAL
+         3. GAME OVER PODIUM (TRUMP & RUMMY 240)
          ========================================================================= */}
-      {showSchedule && activeGame && (
-        <div className="modal-backdrop" onClick={() => setShowSchedule(false)}>
-          <div className="modal-panel" style={{ maxWidth: 680 }} onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3 className="modal-title">📅 Full 19-Round Rotation Schedule</h3>
-              <button className="modal-close" onClick={() => setShowSchedule(false)}>✕</button>
+      {screen === 'gameover' && activeGame && (
+        <div className="podium-hero">
+          <div className="podium-trophy">🏆</div>
+          <div className="podium-kicker">
+            {activeGame.game_type === 'trump' ? '19 Rounds Complete' : 'Last Man Standing · Pool 240'}
+          </div>
+          <h1 className="podium-winner">
+            {activeGame.winner_names.join(' & ') || 'Champion'} Wins!
+          </h1>
+
+          <div className="podium-body" style={{ marginTop: 20 }}>
+            <div className="card-box">
+              <div className="section-head" style={{ marginBottom: 8 }}>
+                <h2 className="section-title">Final Standings</h2>
+              </div>
+              <div className="rank-list">
+                {activeGame.game_type === 'trump'
+                  ? rankPlayers(activeGame.players, computeTotals(activeGame.rounds as RoundRecord[]), activeGame.rounds as RoundRecord[]).map((p) => (
+                      <div key={p.name} className={`rank-row ${p.rank === 1 ? 'first' : ''}`}>
+                        <div className="rank-left">
+                          <div className="rank-badge">{p.rank === 1 ? '🥇' : p.rank === 2 ? '🥈' : p.rank === 3 ? '🥉' : `#${p.rank}`}</div>
+                          <span className="player-name">{p.name}</span>
+                        </div>
+                        <div className="tabular" style={{ fontSize: 18, fontWeight: 900 }}>
+                          {formatSigned(p.score)}
+                        </div>
+                      </div>
+                    ))
+                  : activeGame.players.map((p, idx) => {
+                      const score = rummyTotals[idx];
+                      const isWinner = activeGame.winner_names.includes(p.name);
+                      return (
+                        <div key={p.name} className={`rank-row ${isWinner ? 'first' : ''}`}>
+                          <div className="rank-left">
+                            <div className="rank-badge">{isWinner ? '🥇' : '❌'}</div>
+                            <span className="player-name">{p.name}</span>
+                          </div>
+                          <div className="tabular" style={{ fontSize: 18, fontWeight: 900, color: score >= 240 ? 'var(--rose-600)' : 'var(--felt-700)' }}>
+                            {score} pts {score >= 240 ? '(Eliminated)' : '(Survivor)'}
+                          </div>
+                        </div>
+                      );
+                    })}
+              </div>
             </div>
-            <div className="modal-body" style={{ padding: 0, overflowX: 'auto' }}>
-              <table className="sched-table">
-                <thead>
-                  <tr>
-                    <th>Rd</th>
-                    <th>Cards</th>
-                    <th>Dir</th>
-                    <th>🃏 Serving</th>
-                    <th>▶ 1st Player</th>
-                    <th>Turn Order</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {ROUND_CARDS.map((cards, r) => {
-                    const m = getRoundMeta(r, activeGame.first_player_idx, activeGame.initial_dir);
-                    const isCurrent = r === activeGame.rounds.length;
-                    return (
-                      <React.Fragment key={r}>
-                        {r === 10 && (
-                          <tr className="row-reversal">
-                            <td colSpan={6} style={{ textAlign: 'center' }}>
-                              🔄 ROTATION REVERSED AFTER 1-CARD ROUND
-                            </td>
-                          </tr>
-                        )}
-                        <tr className={isCurrent ? 'sched-current' : ''}>
-                          <td className="tabular"><strong>R{r + 1}</strong>{isCurrent ? ' ●' : ''}</td>
-                          <td className="tabular">{cards}</td>
-                          <td>{m.activeDir === 'CW' ? '↻ CW' : '↺ ACW'}</td>
-                          <td>🃏 {activeGame.players[m.serverIdx].name}</td>
-                          <td>▶ {activeGame.players[m.starterIdx].name}</td>
-                          <td style={{ fontSize: 10.5, color: 'var(--ink-500)' }}>
-                            {m.turnOrder.map((p) => activeGame.players[p].name).join(' → ')}
-                          </td>
-                        </tr>
-                      </React.Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            <div className="modal-footer">
-              <button className="btn-ok" onClick={() => setShowSchedule(false)}>Close</button>
+
+            <div className="action-grid" style={{ marginTop: 14 }}>
+              <button
+                className="btn-action-card emerald"
+                onClick={() => {
+                  setScreen('setup');
+                }}
+              >
+                🔄 Play New Game
+              </button>
+              <button
+                className="btn-action-card"
+                onClick={() => setScreen('history')}
+              >
+                📜 View Past Games
+              </button>
             </div>
           </div>
         </div>
       )}
 
       {/* =========================================================================
-         SETTINGS / OPTIONS MODAL
+         4. HISTORY SCREEN
+         ========================================================================= */}
+      {screen === 'history' && (
+        <div className="setup-bg">
+          <div className="setup-wrap">
+            <div className="brand-header">
+              <h1 className="brand-title">Game History</h1>
+              <p className="brand-sub">Saved matches across Trump & Rummy 240</p>
+            </div>
+
+            <div className="game-tab-strip">
+              <button
+                className={`game-tab-btn ${historyFilter === 'all' ? 'active' : ''}`}
+                onClick={() => setHistoryFilter('all')}
+              >
+                All Games
+              </button>
+              <button
+                className={`game-tab-btn ${historyFilter === 'trump' ? 'active' : ''}`}
+                onClick={() => setHistoryFilter('trump')}
+              >
+                🃏 Trump ({games.filter((g) => g.game_type === 'trump').length})
+              </button>
+              <button
+                className={`game-tab-btn ${historyFilter === 'rummy240' ? 'active' : ''}`}
+                onClick={() => setHistoryFilter('rummy240')}
+              >
+                🎴 Rummy ({games.filter((g) => g.game_type === 'rummy240').length})
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {games
+                .filter((g) => historyFilter === 'all' || g.game_type === historyFilter)
+                .map((g) => (
+                  <div key={g.id} className="card-box" style={{ background: '#fff' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div>
+                        <strong>{g.game_type === 'trump' ? '🃏 Trump (Judgement)' : '🎴 Indian Rummy 240'} #{g.id}</strong>
+                        <div style={{ fontSize: 12, color: 'var(--ink-500)', marginTop: 2 }}>
+                          {g.players.map((p) => p.name).join(', ')} ·{' '}
+                          {g.status === 'completed'
+                            ? `Winner: ${g.winner_names.join(', ')}`
+                            : `${g.rounds.length} rounds`}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <button className="btn-ok" style={{ padding: '6px 12px', minHeight: 36, fontSize: 12 }} onClick={() => resumeGame(g)}>
+                          {g.status === 'completed' ? 'View Sheet' : 'Resume'}
+                        </button>
+                        <button className="btn-danger" style={{ padding: '6px 10px', minHeight: 36, fontSize: 12 }} onClick={() => handleDeleteGame(g.id)}>
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+            </div>
+
+            <button className="btn-ghost-light" style={{ marginTop: 16 }} onClick={() => setScreen('setup')}>
+              ← Back to New Game Setup
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+         SETTINGS MODAL
          ========================================================================= */}
       {showSettings && (
         <div className="modal-backdrop" onClick={() => setShowSettings(false)}>
@@ -1257,146 +1495,21 @@ export default function TrumpScorerPage() {
                   setScreen('setup');
                 }}
               >
-                🏠 Back to Setup (Keep Game Saved)
+                🏠 Back to Setup / Switch Game
               </button>
               <button
                 className="btn-action-card"
                 onClick={() => {
                   setShowSettings(false);
-                  setShowSchedule(true);
+                  setScreen('history');
                 }}
               >
-                📅 View 19-Round Schedule
-              </button>
-              <button
-                className="btn-action-card"
-                onClick={() => {
-                  setShowSettings(false);
-                  copySummary();
-                }}
-              >
-                📋 Copy Standings for WhatsApp
+                📜 View All Past Games
               </button>
             </div>
           </div>
         </div>
       )}
-
-      {/* =========================================================================
-         EDIT ROUND MODAL
-         ========================================================================= */}
-      {editingRoundIdx !== null && activeGame && (() => {
-        const meta = getRoundMeta(editingRoundIdx, activeGame.first_player_idx, activeGame.initial_dir);
-        const cardCount = ROUND_CARDS[editingRoundIdx];
-        const sumWon = editWons.reduce((a, b) => a + b, 0);
-        const isValid = sumWon === cardCount;
-        const nums = Array.from({ length: cardCount + 1 }, (_, i) => i);
-        const gridClass = cardCount <= 3 ? 'cols-4' : cardCount <= 4 ? 'cols-5' : '';
-
-        return (
-          <div className="modal-backdrop" onClick={() => setEditingRoundIdx(null)}>
-            <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
-              <div className="modal-header">
-                <div>
-                  <h3 className="modal-title">Edit Round {editingRoundIdx + 1} ({cardCount} {cardCount === 1 ? 'Card' : 'Cards'})</h3>
-                  <div style={{ fontSize: 11, color: 'var(--ink-500)', marginTop: 2 }}>
-                    {meta.activeDir === 'CW' ? '↻ CW' : '↺ ACW'} · 🃏 Serving: {activeGame.players[meta.serverIdx].name}
-                  </div>
-                </div>
-                <button className="modal-close" onClick={() => setEditingRoundIdx(null)}>✕</button>
-              </div>
-
-              <div className="modal-body">
-                <div className="segmented-2" style={{ marginBottom: 12 }}>
-                  <button className={`seg-btn ${editTab === 'bids' ? 'active-cw' : ''}`} onClick={() => setEditTab('bids')}>
-                    Edit Bids
-                  </button>
-                  <button className={`seg-btn ${editTab === 'wons' ? 'active-cw' : ''}`} onClick={() => setEditTab('wons')}>
-                    Edit Tricks Won
-                  </button>
-                </div>
-
-                {meta.turnOrder.map((pIdx) => {
-                  const player = activeGame.players[pIdx];
-                  const isActive = editActivePlayer === pIdx;
-                  const sc = scoreEntry(editBids[pIdx], editWons[pIdx]);
-                  const otherSum = editWons.reduce((s, v, idx) => s + (idx === pIdx ? 0 : v), 0);
-                  const maxAllowedWon = Math.max(0, cardCount - otherSum);
-
-                  return (
-                    <div key={player.id} className={`player-card ${isActive ? 'active' : ''}`} style={{ marginBottom: 8 }}>
-                      <button className="player-card-header" onClick={() => setEditActivePlayer(pIdx)}>
-                        <div className="player-left">
-                          <span className="player-name">{player.name}</span>
-                          {pIdx === meta.starterIdx && <span className="badge-role badge-first">1st</span>}
-                          {pIdx === meta.serverIdx && <span className="badge-role badge-server">🃏</span>}
-                        </div>
-                        <div className="player-right">
-                          <span className={`preview-pill ${sc.status}`}>{sc.notation} ({formatSigned(sc.delta)})</span>
-                          <span className="bid-chip tabular">B:{editBids[pIdx]}</span>
-                          <span className="bid-chip tabular" style={{ background: '#0f172a', color: '#fff', borderColor: '#0f172a' }}>
-                            W:{editWons[pIdx]}
-                          </span>
-                        </div>
-                      </button>
-
-                      {isActive && (
-                        <div className="tap-drawer">
-                          <div className="tap-drawer-head">
-                            <span className="tap-prompt">
-                              {editTab === 'bids' ? `Tap Bid (${player.name})` : `Tap Tricks Won (${player.name})`}
-                            </span>
-                          </div>
-                          <div className={`num-grid ${gridClass}`}>
-                            {nums.map((n) => {
-                              const isSel = editTab === 'bids' ? editBids[pIdx] === n : editWons[pIdx] === n;
-                              const disabled = editTab === 'wons' && n > maxAllowedWon && !isSel;
-                              return (
-                                <button
-                                  key={n}
-                                  disabled={disabled}
-                                  className={`num-btn tabular ${isSel ? (editTab === 'bids' ? 'selected-bid' : 'selected-won') : ''}`}
-                                  onClick={() => {
-                                    if (editTab === 'bids') {
-                                      const next = [...editBids];
-                                      next[pIdx] = n;
-                                      setEditBids(next);
-                                    } else {
-                                      const next = [...editWons];
-                                      next[pIdx] = n;
-                                      setEditWons(next);
-                                    }
-                                  }}
-                                >
-                                  {n}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-
-              <div className="modal-footer" style={{ justifyContent: 'space-between' }}>
-                <div className={`footer-status tabular ${isValid ? 'ok' : 'warn'}`}>
-                  Tricks: {sumWon} / {cardCount} {isValid ? '✓' : ''}
-                </div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button className="btn-secondary-md" style={{ minHeight: 44 }} onClick={() => setEditingRoundIdx(null)}>
-                    Cancel
-                  </button>
-                  <button className="btn-ok" disabled={!isValid} onClick={saveEditedRound}>
-                    Save Round {editingRoundIdx + 1}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
 
       {/* Toast */}
       {toast && (

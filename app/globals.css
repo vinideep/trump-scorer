@@ -1749,3 +1749,208 @@ button:disabled {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+/* =========================================================================
+   CARD GAME HUB & RUMMY 240 EXTENSIONS
+   ========================================================================= */
+.hub-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  width: 100%;
+}
+
+@media (min-width: 480px) {
+  .hub-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.hub-card {
+  background: var(--bg-card);
+  border: 2px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+  transition: all 0.15s ease;
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+}
+
+.hub-card:hover {
+  border-color: var(--felt-600);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+.hub-card.active {
+  border-color: var(--felt-600);
+  background: var(--felt-50);
+  box-shadow: 0 0 0 3px rgba(21, 128, 98, 0.15);
+}
+
+.hub-icon {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.hub-title {
+  font-size: 16px;
+  font-weight: 900;
+  color: var(--ink-900);
+  margin: 0;
+}
+
+.hub-desc {
+  font-size: 12px;
+  color: var(--ink-500);
+  line-height: 1.4;
+  margin: 0;
+}
+
+.hub-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--felt-700);
+  background: #fff;
+  border: 1px solid var(--border-soft);
+  padding: 4px 8px;
+  border-radius: var(--radius-pill);
+}
+
+.rummy-btn-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.rummy-quick-btn {
+  min-height: 44px;
+  border-radius: 10px;
+  border: 1.5px solid var(--border-soft);
+  background: #fff;
+  font-size: 13px;
+  font-weight: 800;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  transition: transform 0.1s, background 0.12s;
+}
+
+.rummy-quick-btn:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.rummy-quick-btn.btn-show {
+  border-color: #86efac;
+  background: var(--felt-50);
+  color: var(--felt-900);
+}
+
+.rummy-quick-btn.btn-show.selected {
+  background: var(--felt-700);
+  color: #fff;
+  border-color: var(--felt-900);
+}
+
+.rummy-quick-btn.btn-drop {
+  border-color: #fcd34d;
+  background: var(--amber-50);
+  color: var(--amber-900);
+}
+
+.rummy-quick-btn.btn-drop.selected {
+  background: var(--amber-500);
+  color: #fff;
+  border-color: #d97706;
+}
+
+.rummy-quick-btn.btn-mid {
+  border-color: #fdba74;
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+.rummy-quick-btn.btn-mid.selected {
+  background: #ea580c;
+  color: #fff;
+  border-color: #9a3412;
+}
+
+.rummy-quick-btn.btn-full {
+  border-color: #fca5a5;
+  background: var(--rose-50);
+  color: var(--rose-600);
+}
+
+.rummy-quick-btn.btn-full.selected {
+  background: var(--rose-600);
+  color: #fff;
+  border-color: #991b1b;
+}
+
+.elim-badge {
+  background: var(--rose-600);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 900;
+  padding: 2px 7px;
+  border-radius: var(--radius-pill);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  animation: pulseElim 2s infinite;
+}
+
+@keyframes pulseElim {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.elim-row {
+  opacity: 0.6;
+  background: #f1f5f9 !important;
+}
+
+.elim-row td {
+  text-decoration: line-through;
+  color: #94a3b8 !important;
+}
+
+.game-tab-strip {
+  display: flex;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 3px;
+  border-radius: 12px;
+  margin-bottom: 12px;
+}
+
+.game-tab-btn {
+  flex: 1;
+  min-height: 38px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 800;
+  color: #d1fae5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.12s ease;
+}
+
+.game-tab-btn.active {
+  background: #fff;
+  color: var(--felt-950);
+  box-shadow: var(--shadow-sm);
+}

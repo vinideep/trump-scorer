@@ -1,16 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ensureSchema, getDb, parseJsonField } from '@/lib/db';
 import { getWinners, type Direction, type PlayerRef, type RoundRecord } from '@/lib/game-engine';
+import { getRummyWinners, isRummyGameCompleted, type RummyRoundRecord } from '@/lib/rummy-engine';
 
 export const dynamic = 'force-dynamic';
 
 function serializeGame(row: Record<string, unknown>) {
   return {
     id: Number(row.id),
+    game_type: (row.game_type as string) || 'trump',
     players: parseJsonField<PlayerRef[]>(row.players, []),
-    first_player_idx: Number(row.first_player_idx),
+    first_player_idx: Number(row.first_player_idx ?? 0),
     initial_dir: (row.initial_dir === 'ACW' ? 'ACW' : 'CW') as Direction,
-    rounds: parseJsonField<RoundRecord[]>(row.rounds, []),
+    rounds: parseJsonField<unknown[]>(row.rounds, []),
     status: row.status === 'completed' ? 'completed' : 'active',
     winner_names: parseJsonField<string[]>(row.winner_names, []),
     created_at: String(row.created_at),
@@ -32,7 +34,7 @@ export async function GET(
 
     const db = getDb();
     const result = await db.execute({
-      sql: 'SELECT id, players, first_player_idx, initial_dir, rounds, status, winner_names, created_at, updated_at FROM games WHERE id = ? LIMIT 1',
+      sql: 'SELECT id, game_type, players, first_player_idx, initial_dir, rounds, status, winner_names, created_at, updated_at FROM games WHERE id = ? LIMIT 1',
       args: [numId],
     });
     if (result.rows.length === 0) {
@@ -58,26 +60,42 @@ export async function PATCH(
     }
 
     const body = await request.json();
-    const rounds: RoundRecord[] = Array.isArray(body?.rounds) ? body.rounds : [];
+    const rounds = Array.isArray(body?.rounds) ? body.rounds : [];
 
     const db = getDb();
     const existing = await db.execute({
-      sql: 'SELECT players FROM games WHERE id = ? LIMIT 1',
+      sql: 'SELECT game_type, players FROM games WHERE id = ? LIMIT 1',
       args: [numId],
     });
     if (existing.rows.length === 0) {
       return NextResponse.json({ error: 'Game not found' }, { status: 404 });
     }
 
+    const gameType = (existing.rows[0].game_type as string) || 'trump';
     const players = parseJsonField<PlayerRef[]>(existing.rows[0].players, []);
-    const status = rounds.length >= 19 ? 'completed' : 'active';
-    const winners = getWinners(players, rounds);
+
+    let status = 'active';
+    let winners: string[] = [];
+
+    if (gameType === 'rummy240') {
+      const rummyRounds = rounds as RummyRoundRecord[];
+      status = isRummyGameCompleted(players, rummyRounds) ? 'completed' : 'active';
+      winners = getRummyWinners(players, rummyRounds);
+    } else {
+      const trumpRounds = rounds as RoundRecord[];
+      status = trumpRounds.length >= 19 ? 'completed' : 'active';
+      winners = getWinners(players, trumpRounds);
+    }
+
+    // Allow explicit status/winner overrides if provided in body
+    if (typeof body?.status === 'string') status = body.status;
+    if (Array.isArray(body?.winner_names)) winners = body.winner_names;
 
     const updated = await db.execute({
       sql: `UPDATE games
             SET rounds = ?, status = ?, winner_names = ?, updated_at = datetime('now')
             WHERE id = ?
-            RETURNING id, players, first_player_idx, initial_dir, rounds, status, winner_names, created_at, updated_at`,
+            RETURNING id, game_type, players, first_player_idx, initial_dir, rounds, status, winner_names, created_at, updated_at`,
       args: [JSON.stringify(rounds), status, JSON.stringify(winners), numId],
     });
 
